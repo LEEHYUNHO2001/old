@@ -16,21 +16,17 @@ extern "C" {
 
 AVFormatContext* fmtCtx;
 int vidx = -1, aidx = -1;
+AVStream* vStream, * aStream;
+AVCodecParameters* vPara, * aPara;
+
 int main(void) {
     int ret = avformat_open_input(&fmtCtx, "C:\\ffstudy\\sample.mp4", NULL, NULL);
     if (ret != 0) { return -1; }
     avformat_find_stream_info(fmtCtx, NULL);
 
-    for (unsigned i = 0; i < fmtCtx->nb_streams; i++) {
-        if (fmtCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            vidx = i;
-        }
-        if (fmtCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            aidx = i;
-        }
-    }
-    //vidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    //aidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_AUDIO, -1, vidx, NULL, 0);
+    vidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    aidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_AUDIO, -1, vidx, NULL, 0);
+
     printf("------비디오, 오디오 스트림 첨자--------\n");
     printf("video = %d번, audio = %d번\n\n", vidx, aidx);
 
@@ -39,8 +35,28 @@ int main(void) {
     printf("시간 = %I64d초\n", fmtCtx->duration / AV_TIME_BASE);
     printf("비트레이트 = %I64d\n", fmtCtx->bit_rate);
 
-    printf("------스트림 정보 조회--------\n");
-    av_dump_format(fmtCtx, vidx, "C:\\ffstudy\\sample.mp4", 0);
+
+    printf("------비디오 스트림 정보--------\n");
+    vStream = fmtCtx->streams[vidx];
+    printf("프레임 개수 = %I64d\n", vStream->nb_frames);
+    printf("프레임 레이트 = %d / %d\n", vStream->avg_frame_rate.num, vStream->avg_frame_rate.den);
+    printf("타임 베이스 = %d / %d\n", vStream->time_base.num, vStream->time_base.den);
+    vPara = vStream->codecpar;
+    printf("폭 = %d\n", vPara->width);
+    printf("높이 = %d\n", vPara->height);
+    printf("색상 포맷 = %d\n", vPara->format);
+    printf("코덱 = %d\n", vPara->codec_id);
+
+    printf("------오디오 스트림 정보--------\n");
+    aStream = fmtCtx->streams[aidx];
+    printf("프레임 개수 = %I64d\n", aStream->nb_frames);
+    printf("타임 베이스 = %d / %d\n", aStream->time_base.num, aStream->time_base.den);
+    aPara = aStream->codecpar;
+    printf("사운드 포맷 = %d\n", aPara->format);
+    printf("코덱 = %d\n", aPara->codec_id);
+    printf("채널 = %d\n", aPara->channels);
+    printf("샘플 레이트 = %d\n", aPara->sample_rate);
+
     avformat_close_input(&fmtCtx);
     return 0;
 }

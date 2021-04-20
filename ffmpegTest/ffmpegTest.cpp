@@ -13,6 +13,7 @@ extern "C" {
 
 #include <stdio.h>
 #include <Windows.h>
+#include <conio.h>
 
 AVFormatContext* fmtCtx;
 int vidx = -1, aidx = -1;
@@ -20,6 +21,14 @@ AVStream * vStream, * aStream;
 AVCodecParameters* vPara, * aPara;
 AVCodec * vCodec, * aCodec;
 AVCodecContext * vCtx, * aCtx;
+AVPacket packet;
+AVFrame vFrame, aFrame;
+
+void arDump(void* array, int length) {
+    for (int i = 0; i < length; i++) {
+        printf("%02X ", *((unsigned char*)array + i));
+    }
+}
 
 int main(void) {
     int ret = avformat_open_input(&fmtCtx, "C:\\ffstudy\\sample.mp4", NULL, NULL);
@@ -36,7 +45,7 @@ int main(void) {
     printf("------동영상 파일 정보--------\n");
     printf("스트림 개수 = %d\n", fmtCtx->nb_streams);
     printf("시간 = %I64d초\n", fmtCtx->duration / AV_TIME_BASE);
-    printf("비트레이트 = %I64d\n", fmtCtx->bit_rate);
+    printf("비트레이트 = %I64d\n\n", fmtCtx->bit_rate);
 
 
     printf("------비디오 스트림 정보--------\n");
@@ -48,7 +57,7 @@ int main(void) {
     printf("폭 = %d\n", vPara->width);
     printf("높이 = %d\n", vPara->height);
     printf("색상 포맷 = %d\n", vPara->format);
-    printf("코덱 = %d\n", vPara->codec_id);
+    printf("코덱 = %d\n\n", vPara->codec_id);
 
     printf("------오디오 스트림 정보--------\n");
     aStream = fmtCtx->streams[aidx];
@@ -58,7 +67,7 @@ int main(void) {
     printf("사운드 포맷 = %d\n", aPara->format);
     printf("코덱 = %d\n", aPara->codec_id);
     printf("채널 = %d\n", aPara->channels);
-    printf("샘플 레이트 = %d\n", aPara->sample_rate);
+    printf("샘플 레이트 = %d\n\n", aPara->sample_rate);
 
     // 비디오 코덱 오픈
     vStream = fmtCtx->streams[vidx];
@@ -80,10 +89,47 @@ int main(void) {
     printf("비디오 코덱 : %d, %s(%s)\n", vCodec->id, vCodec->name, vCodec->long_name);
     printf("능력치 : %x\n", vCodec->capabilities);
     printf("오디오 코덱 : %d, %s(%s)\n", aCodec->id, aCodec->name, aCodec->long_name);
-    printf("능력치 : %x\n", aCodec->capabilities);
+    printf("능력치 : %x\n\n", aCodec->capabilities);
+
+    // 루프를 돌며 패킷을 모두 읽는다.
+    printf("------패킷 읽기--------\n");
+    int vcount = 0, acount = 0;
+    while (av_read_frame(fmtCtx, &packet) == 0) {
+        if (packet.stream_index == vidx) {
+            avcodec_send_packet(vCtx, &packet);
+            avcodec_receive_frame(vCtx, &vFrame);
+            if (vcount == 0) {
+                printf("Video format : %d(%d x %d).\n",
+                    vFrame.format, vFrame.width, vFrame.height);
+            }
+            printf("V%-3d(pts=%3I64d,size=%5d) : ", vcount++, vFrame.pts, vFrame.pkt_size);
+            for (int i = 0; i < 3; i++) {
+                printf("%d ", vFrame.linesize[i]);
+            }
+            arDump(vFrame.data[0], 4);
+            arDump(vFrame.data[1], 2);
+            arDump(vFrame.data[2], 2);
+        }
+        if (packet.stream_index == aidx) {
+            avcodec_send_packet(aCtx, &packet);
+            avcodec_receive_frame(aCtx, &aFrame);
+            if (acount == 0) {
+                printf("Audio format : %d, %dch %d\n",
+                    aFrame.format, aFrame.channels, aFrame.sample_rate);
+            }
+            printf("A%-3d(pts=%3I64d,size=%5d) : ", acount++, aFrame.pts, aFrame.pkt_size);
+            arDump(aFrame.extended_data, 16);
+        }
+        av_packet_unref(&packet);
+        printf("\n");
+        if (_getch() == 27) break;
+    }
+
+    // 메모리 해제
+    av_frame_unref(&vFrame);
+    av_frame_unref(&aFrame);
     avcodec_free_context(&vCtx);
     avcodec_free_context(&aCtx);
-
     avformat_close_input(&fmtCtx);
     return 0;
 }

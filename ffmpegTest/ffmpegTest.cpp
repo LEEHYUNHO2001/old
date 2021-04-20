@@ -17,6 +17,14 @@ extern "C" {
 AVFormatContext* fmtCtx;
 
 int main(void) {
-    av_log(NULL, AV_LOG_INFO, "AVFromat major version = %d\n", LIBAVFORMAT_VERSION_MAJOR);
+    int ret = avformat_open_input(&fmtCtx, "C:\\ffstudy\\sample.mp4", NULL, NULL);
+    if (ret != 0) { return -1; }
+    avformat_find_stream_info(fmtCtx, NULL);
+
+    printf("스트림 개수 = %d\n", fmtCtx->nb_streams);
+    printf("시간 = %I64d초\n", fmtCtx->duration / AV_TIME_BASE);
+    printf("비트레이트 = %I64d\n", fmtCtx->bit_rate);
+
+    avformat_close_input(&fmtCtx);
     return 0;
 }

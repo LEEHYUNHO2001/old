@@ -110,17 +110,19 @@ int main(void) {
             for (;;) {
                 ret = avcodec_receive_frame(vCtx, &vFrame);
                 if (ret == AVERROR(EAGAIN)) break; 
-                if (vcount == 0) {
+                /*if (vcount == 0) {
                     printf("Video format : %d(%d x %d).\n",
                         vFrame.format, vFrame.width, vFrame.height);
                 }
                 printf("V%-3d(pts=%3I64d,size=%5d) : ", vcount++, vFrame.pts, vFrame.pkt_size);
                 for (int i = 0; i < 3; i++) {
                     printf("%d ", vFrame.linesize[i]);
-                }
+                }        
                 arDump(vFrame.data[0], 4);
                 arDump(vFrame.data[1], 2);
-                arDump(vFrame.data[2], 2);
+                arDump(vFrame.data[2], 2);*/
+                printf("V%d => ppts:%I64d, pts:%I64d, dts:%I64d, best=%I64d\n",
+                    vcount++, packet.pts, vFrame.pts, vFrame.pkt_dts, vFrame.best_effort_timestamp);
             }
         }
         if (packet.stream_index == aidx) {
@@ -129,12 +131,14 @@ int main(void) {
             for (;;) {
                 ret = avcodec_receive_frame(aCtx, &aFrame);
                 if (ret == AVERROR(EAGAIN)) break;
-                if (acount == 0) {
+                /*if (acount == 0) {
                     printf("Audio format : %d, %dch %d\n",
                         aFrame.format, aFrame.channels, aFrame.sample_rate);
                 }
                 printf("A%-3d(pts=%3I64d,size=%5d) : ", acount++, aFrame.pts, aFrame.pkt_size);
-                arDump(aFrame.extended_data, 16);
+                arDump(aFrame.extended_data, 16);*/
+                printf("A%d => ppts:%I64d, pts:%I64d, dts:%I64d, best=%I64d\n",
+                     acount++, packet.pts, aFrame.pts, aFrame.pkt_dts, aFrame.best_effort_timestamp);
             }
         }
         av_packet_unref(&packet);

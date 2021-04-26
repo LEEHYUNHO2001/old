@@ -32,6 +32,10 @@ AVCodecContext* vCtx, * aCtx;
 
 bool isOpen;
 
+SwsContext* swsCtx;
+AVFrame RGBFrame;
+uint8_t* rgbbuf;
+
 //Main
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     _In_ LPWSTR lpCmdLine, _In_ int nCmdShow) {
@@ -132,6 +136,8 @@ void OpenMovie(LPCTSTR movie) {
 }
 //메모리 정리
 void CloseMovie() {
+    if (rgbbuf) { av_free(rgbbuf); rgbbuf = NULL; }
+    if (swsCtx) { sws_freeContext(swsCtx); swsCtx = NULL; }
     if (vCtx) { avcodec_free_context(&vCtx); }
     if (aCtx) { avcodec_free_context(&aCtx); }
     if (fmtCtx) { avformat_close_input(&fmtCtx); }
@@ -149,26 +155,28 @@ int DrawFrame(HDC hdc) {
             for (;;) {
                 ret = avcodec_receive_frame(vCtx, &vFrame);
                 if (ret == AVERROR(EAGAIN)) break;
-
-                // 압축 해제한 이미지 출력
+                // 스케일 컨텍스트 생성
+                if (swsCtx == NULL) {
+                    swsCtx = sws_getContext(
+                        vFrame.width, vFrame.height, AVPixelFormat(vFrame.format),
+                        vFrame.width, vFrame.height, AV_PIX_FMT_RGB24,
+                        SWS_BICUBIC, NULL, NULL, NULL);
+                    // 변환 결과를 저장할 프레임 버퍼 할당
+                    int rasterbufsize = av_image_get_buffer_size(AV_PIX_FMT_RGB24,
+                        vFrame.width, vFrame.height, 1);
+                    rgbbuf = (uint8_t*)av_malloc(rasterbufsize);
+                    av_image_fill_arrays(RGBFrame.data, RGBFrame.linesize, rgbbuf,
+                        AV_PIX_FMT_RGB24, vFrame.width, vFrame.height, 1);
+                }
+                // 변환을 수행한다.
+                sws_scale(swsCtx, vFrame.data, vFrame.linesize, 0, vFrame.height,
+                    RGBFrame.data, RGBFrame.linesize);
+                // 변환된 결과를 출력한다.
+                unsigned char* raster = RGBFrame.data[0];
                 for (int y = 0; y < vFrame.height; y++) {
                     for (int x = 0; x < vFrame.width; x++) {
-                        // 프레임 버퍼에서 YUV 요소를 구한다. 420
-                        unsigned char Y, U, V;
-                        Y = vFrame.data[0][vFrame.linesize[0] * y + x];
-                        U = vFrame.data[1][vFrame.linesize[1] * (y / 2) + x / 2];
-                        V = vFrame.data[2][vFrame.linesize[2] * (y / 2) + x / 2];
-                        // 공식에 따라 YUV를 RGB로 변환한다.
-                        int r, g, b;
-                        r = int(Y + 1.3707 * (V - 128));
-                        g = int(Y - 0.6980 * (U - 128) - 0.3376 * (V - 128));
-                        b = int(Y + 1.7324 * (U - 128));
-                        // 색상 요소가 0 ~ 255 범위를 넘지 않도록 한다.
-                        r = max(0, min(255, r));
-                        g = max(0, min(255, g));
-                        b = max(0, min(255, b));
-                        // 색상값으로 점을 찍는다.
-                        COLORREF color = RGB(r, g, b);
+                        int offset = (y * vFrame.width + x) * 3;
+                        COLORREF color = RGB(raster[offset + 2], raster[offset + 1], raster[offset + 0]);
                         SetPixel(hdc, x, y, color);
                     }
                 }

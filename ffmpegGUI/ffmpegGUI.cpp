@@ -147,6 +147,9 @@ int DrawFrame(HDC hdc) {
     int ret;
     AVPacket packet = { 0, };
     AVFrame vFrame = { 0, }, aFrame = { 0, };
+    HDC MemDC;
+    HBITMAP OldBitmap;
+    MemDC = CreateCompatibleDC(hdc);
 
     while (av_read_frame(fmtCtx, &packet) == 0) {
         if (packet.stream_index == vidx) {
@@ -171,16 +174,27 @@ int DrawFrame(HDC hdc) {
                 // 변환을 수행한다.
                 sws_scale(swsCtx, vFrame.data, vFrame.linesize, 0, vFrame.height,
                     RGBFrame.data, RGBFrame.linesize);
-                // 변환된 결과를 출력한다.
+                // 비트맵으로 뿌리기
+                HBITMAP bitmap = CreateBitmap(vFrame.width, vFrame.height, 1, 32, NULL);
+                int rastersize = vFrame.width * vFrame.height * sizeof(COLORREF);
+                COLORREF* bitraster = (COLORREF*)malloc(rastersize);
+                COLORREF* pbuf = bitraster;
+
                 unsigned char* raster = RGBFrame.data[0];
                 for (int y = 0; y < vFrame.height; y++) {
                     for (int x = 0; x < vFrame.width; x++) {
                         int offset = (y * vFrame.width + x) * 3;
-                        COLORREF color = RGB(raster[offset + 2], raster[offset + 1], raster[offset + 0]);
-                        SetPixel(hdc, x, y, color);
+                        *pbuf++ = RGB(raster[offset], raster[offset + 1], raster[offset + 2]);
                     }
                 }
+                SetBitmapBits(bitmap, rastersize, bitraster);
+                OldBitmap = (HBITMAP)SelectObject(MemDC, bitmap);
+                BitBlt(hdc, 0, 0, vFrame.width, vFrame.height, MemDC, 0, 0, SRCCOPY);
+                SelectObject(MemDC, OldBitmap);
+                DeleteObject(bitmap);
+                free(bitraster);
             }
+            DeleteDC(MemDC);
             av_packet_unref(&packet);
             return 0;
         }

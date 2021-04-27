@@ -1,4 +1,6 @@
-﻿extern "C" {
+﻿//비트맵, 스레드, software scale, winapi구조, usleep 등 사용
+
+extern "C" {
 #include <libavformat/avformat.h> //컨테이너 먹서, 디먹서
 #include <libavcodec/avcodec.h> //디코더, 인코더
 #include <libavdevice/avdevice.h>//캡처 및 랜더링 기능 제공
@@ -8,7 +10,6 @@
 #include <libavutil/imgutils.h>
 #include <libswresample/swresample.h>//오디오 리샘플링
 }
-
 #include <windows.h>//그래픽 환경
 #include <commctrl.h>//공통 컨트롤
 #include <tchar.h>//유니코드 문자열 처리
@@ -103,8 +104,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 void OpenMovie(LPCTSTR movie) {
     char MoviePathAnsi[MAX_PATH];
     WideCharToMultiByte(CP_ACP, 0, movie, -1, MoviePathAnsi, MAX_PATH, NULL, NULL);
-    int ret = avformat_open_input(&fmtCtx, MoviePathAnsi, NULL, NULL);
 
+    int ret = avformat_open_input(&fmtCtx, MoviePathAnsi, NULL, NULL);
     if (ret != 0) {
         isOpen = false;
         MessageBox(hWndMain, TEXT("동영상 파일이 없습니다."), TEXT("알림"), MB_OK);
@@ -132,13 +133,13 @@ void OpenMovie(LPCTSTR movie) {
     hPlayThread = CreateThread(NULL, 0, PlayThread, NULL, 0, &ThreadID);
     isOpen = true;
 }
-//메모리 정리
+//쓰레드 종료
 void CloseMovie() {
     status = P_EXIT;
     WaitForSingleObject(hPlayThread, INFINITE);
     CloseHandle(hPlayThread);
 }
-
+//대기
 void uSleep(int64_t usec) {
     LARGE_INTEGER start, end;
     int64_t elapse;
@@ -149,7 +150,6 @@ void uSleep(int64_t usec) {
         elapse = (end.QuadPart - start.QuadPart) * 1000000 / frequency.QuadPart;
     } while (elapse < usec);
 }
-
 //패킷 읽고 처리
 DWORD WINAPI PlayThread(LPVOID para) {
     int ret;
@@ -171,13 +171,13 @@ DWORD WINAPI PlayThread(LPVOID para) {
             for (;;) {
                 ret = avcodec_receive_frame(vCtx, &vFrame);
                 if (ret == AVERROR(EAGAIN)) break;
-                // 스케일 컨텍스트 생성
+                
                 if (swsCtx == NULL) {
+                    // 스케일 컨텍스트 생성
                     swsCtx = sws_getContext(
                         vFrame.width, vFrame.height, AVPixelFormat(vFrame.format),
                         vFrame.width, vFrame.height, AV_PIX_FMT_BGRA,
                         SWS_BICUBIC, NULL, NULL, NULL);
-
                     // 변환 결과를 저장할 프레임 버퍼 할당
                     int rasterbufsize = av_image_get_buffer_size(AV_PIX_FMT_BGRA,
                         vFrame.width, vFrame.height, 1);

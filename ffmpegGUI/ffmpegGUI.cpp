@@ -17,7 +17,6 @@
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
 void OpenMovie(LPCTSTR movie);
 void CloseMovie();
-int DrawFrame(HDC hdc);
 
 HINSTANCE g_hInst;
 LPCTSTR lpszClass = TEXT("MicroPlayer");
@@ -35,6 +34,13 @@ bool isOpen;
 SwsContext* swsCtx;
 AVFrame RGBFrame;
 uint8_t* rgbbuf;
+
+LARGE_INTEGER frequency;
+DWORD ThreadID;
+HANDLE hPlayThread;
+enum ePlayStatus { P_STOP, P_RUN, P_EXIT, P_EOF };
+ePlayStatus status = P_STOP;
+DWORD WINAPI PlayThread(LPVOID para);
 
 //Main
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
@@ -67,27 +73,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     }
     return (int)Message.wParam;
 }
+
 //Window 프로시저
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
     HDC hdc;
     PAINTSTRUCT ps;
-
+    
     switch (iMessage) {
     case WM_CREATE:
         hWndMain = hWnd;
         InitCommonControls();
+        QueryPerformanceFrequency(&frequency);
         OpenMovie(TEXT("c:\\ffstudy\\sample.mp4"));
-        SetTimer(hWnd, 0, 33, NULL);
-        return 0;
-
-    case WM_TIMER:
-        hdc = GetDC(hWnd);
-        if (isOpen) {
-            if (DrawFrame(hdc) == 1) {
-                KillTimer(hWnd, 0);
-            }
-        }
-        ReleaseDC(hWnd, hdc);
         return 0;
 
     case WM_PAINT:
@@ -132,26 +129,42 @@ void OpenMovie(LPCTSTR movie) {
         avcodec_parameters_to_context(aCtx, aPara);
         avcodec_open2(aCtx, aCodec, NULL);
     }
+    hPlayThread = CreateThread(NULL, 0, PlayThread, NULL, 0, &ThreadID);
     isOpen = true;
 }
 //메모리 정리
 void CloseMovie() {
-    if (rgbbuf) { av_free(rgbbuf); rgbbuf = NULL; }
-    if (swsCtx) { sws_freeContext(swsCtx); swsCtx = NULL; }
-    if (vCtx) { avcodec_free_context(&vCtx); }
-    if (aCtx) { avcodec_free_context(&aCtx); }
-    if (fmtCtx) { avformat_close_input(&fmtCtx); }
+    status = P_EXIT;
+    WaitForSingleObject(hPlayThread, INFINITE);
+    CloseHandle(hPlayThread);
 }
+
+void uSleep(int64_t usec) {
+    LARGE_INTEGER start, end;
+    int64_t elapse;
+
+    QueryPerformanceCounter(&start);
+    do {
+        QueryPerformanceCounter(&end);
+        elapse = (end.QuadPart - start.QuadPart) * 1000000 / frequency.QuadPart;
+    } while (elapse < usec);
+}
+
 //패킷 읽고 처리
-int DrawFrame(HDC hdc) {
+DWORD WINAPI PlayThread(LPVOID para) {
     int ret;
     AVPacket packet = { 0, };
     AVFrame vFrame = { 0, }, aFrame = { 0, };
+    HDC hdc;
+    hdc = GetDC(hWndMain);
     HDC MemDC;
     HBITMAP OldBitmap;
     MemDC = CreateCompatibleDC(hdc);
+    double framerate = av_q2d(vStream->r_frame_rate);
+    int64_t framegap = int64_t(AV_TIME_BASE / framerate);
 
     while (av_read_frame(fmtCtx, &packet) == 0) {
+        if (status == P_EXIT) break;
         if (packet.stream_index == vidx) {
             ret = avcodec_send_packet(vCtx, &packet);
             if (ret != 0) { continue; }
@@ -181,12 +194,20 @@ int DrawFrame(HDC hdc) {
                 BitBlt(hdc, 0, 0, vFrame.width, vFrame.height, MemDC, 0, 0, SRCCOPY);
                 SelectObject(MemDC, OldBitmap);
                 DeleteObject(bitmap);
+                uSleep(framegap);
             }
             av_packet_unref(&packet);
-            return 0;
         }
     }
     av_frame_unref(&vFrame);
     av_frame_unref(&aFrame);
-    return 1;
+    DeleteDC(MemDC);
+    ReleaseDC(hWndMain, hdc);
+    if (rgbbuf) { av_free(rgbbuf); rgbbuf = NULL; }
+    if (swsCtx) { sws_freeContext(swsCtx); swsCtx = NULL; }
+    if (vCtx) { avcodec_free_context(&vCtx); }
+    if (aCtx) { avcodec_free_context(&aCtx); }
+    if (fmtCtx) { avformat_close_input(&fmtCtx); }
+    isOpen = false;
+    return 0;
 }

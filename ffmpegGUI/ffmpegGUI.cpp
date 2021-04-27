@@ -39,7 +39,6 @@ uint8_t* rgbbuf;
 //Main
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     _In_ LPWSTR lpCmdLine, _In_ int nCmdShow) {
-
     HWND hWnd;
     MSG Message;
     WNDCLASS WndClass;
@@ -77,20 +76,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
     case WM_CREATE:
         hWndMain = hWnd;
         InitCommonControls();
-        OpenMovie(TEXT("C:\\ffstudy\\sample.mp4"));
+        OpenMovie(TEXT("c:\\ffstudy\\sample.mp4"));
+        SetTimer(hWnd, 0, 33, NULL);
+        return 0;
+
+    case WM_TIMER:
+        hdc = GetDC(hWnd);
+        if (isOpen) {
+            if (DrawFrame(hdc) == 1) {
+                KillTimer(hWnd, 0);
+            }
+        }
+        ReleaseDC(hWnd, hdc);
         return 0;
 
     case WM_PAINT:
         hdc = BeginPaint(hWnd, &ps);
         EndPaint(hWnd, &ps);
-        return 0;
-
-    case WM_LBUTTONDOWN:
-        hdc = GetDC(hWnd);
-        if (isOpen) {
-            DrawFrame(hdc);
-        }
-        ReleaseDC(hWnd, hdc);
         return 0;
 
     case WM_DESTROY:
@@ -104,18 +106,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 void OpenMovie(LPCTSTR movie) {
     char MoviePathAnsi[MAX_PATH];
     WideCharToMultiByte(CP_ACP, 0, movie, -1, MoviePathAnsi, MAX_PATH, NULL, NULL);
-
     int ret = avformat_open_input(&fmtCtx, MoviePathAnsi, NULL, NULL);
+
     if (ret != 0) {
         isOpen = false;
         MessageBox(hWndMain, TEXT("동영상 파일이 없습니다."), TEXT("알림"), MB_OK);
         return;
     }
-
     avformat_find_stream_info(fmtCtx, NULL);
     vidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
     aidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_AUDIO, -1, vidx, NULL, 0);
-
     if (vidx >= 0) {
         vStream = fmtCtx->streams[vidx];
         vPara = vStream->codecpar;
@@ -162,39 +162,26 @@ int DrawFrame(HDC hdc) {
                 if (swsCtx == NULL) {
                     swsCtx = sws_getContext(
                         vFrame.width, vFrame.height, AVPixelFormat(vFrame.format),
-                        vFrame.width, vFrame.height, AV_PIX_FMT_RGB24,
+                        vFrame.width, vFrame.height, AV_PIX_FMT_BGRA,
                         SWS_BICUBIC, NULL, NULL, NULL);
+
                     // 변환 결과를 저장할 프레임 버퍼 할당
-                    int rasterbufsize = av_image_get_buffer_size(AV_PIX_FMT_RGB24,
+                    int rasterbufsize = av_image_get_buffer_size(AV_PIX_FMT_BGRA,
                         vFrame.width, vFrame.height, 1);
                     rgbbuf = (uint8_t*)av_malloc(rasterbufsize);
                     av_image_fill_arrays(RGBFrame.data, RGBFrame.linesize, rgbbuf,
-                        AV_PIX_FMT_RGB24, vFrame.width, vFrame.height, 1);
+                        AV_PIX_FMT_BGRA, vFrame.width, vFrame.height, 1);
                 }
                 // 변환을 수행한다.
                 sws_scale(swsCtx, vFrame.data, vFrame.linesize, 0, vFrame.height,
                     RGBFrame.data, RGBFrame.linesize);
                 // 비트맵으로 뿌리기
-                HBITMAP bitmap = CreateBitmap(vFrame.width, vFrame.height, 1, 32, NULL);
-                int rastersize = vFrame.width * vFrame.height * sizeof(COLORREF);
-                COLORREF* bitraster = (COLORREF*)malloc(rastersize);
-                COLORREF* pbuf = bitraster;
-
-                unsigned char* raster = RGBFrame.data[0];
-                for (int y = 0; y < vFrame.height; y++) {
-                    for (int x = 0; x < vFrame.width; x++) {
-                        int offset = (y * vFrame.width + x) * 3;
-                        *pbuf++ = RGB(raster[offset], raster[offset + 1], raster[offset + 2]);
-                    }
-                }
-                SetBitmapBits(bitmap, rastersize, bitraster);
+                HBITMAP bitmap = CreateBitmap(vFrame.width, vFrame.height, 1, 32, RGBFrame.data[0]);
                 OldBitmap = (HBITMAP)SelectObject(MemDC, bitmap);
                 BitBlt(hdc, 0, 0, vFrame.width, vFrame.height, MemDC, 0, 0, SRCCOPY);
                 SelectObject(MemDC, OldBitmap);
                 DeleteObject(bitmap);
-                free(bitraster);
             }
-            DeleteDC(MemDC);
             av_packet_unref(&packet);
             return 0;
         }

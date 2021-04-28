@@ -6,11 +6,21 @@
 
 HWAVEOUT hWaveDev;
 HANDLE hFile;
-DWORD filesize;
 DWORD dwRead;
 char* samplebuf;
+DWORD bufsize;
 WAVEFORMATEX wf;
 WAVEHDR hdr = { NULL, };
+
+// 대기를 위한 변수
+bool bWait = true;
+
+void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
+    // 재생이 끝나면 대기를 풀어준다.
+    if (uMsg == WOM_DONE) {
+        bWait = false;
+    }
+}
 
 int main() {
     //사운드 출력 장치 조사
@@ -27,8 +37,9 @@ int main() {
     }
 
     // 웨이브 파일을 연다.
-    hFile = CreateFile(TEXT("C:\\ffstudy\\techno.wav"), GENERIC_READ, FILE_SHARE_READ, NULL,
+    hFile = CreateFile(TEXT("c:\\ffstudy\\techno.wav"), GENERIC_READ, FILE_SHARE_READ, NULL,
        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    //에러처리
     if (hFile == INVALID_HANDLE_VALUE) {
         puts("file not found");
         return -1;
@@ -41,20 +52,22 @@ int main() {
     wf.nSamplesPerSec = 44100;
     wf.nBlockAlign = wf.nChannels * wf.wBitsPerSample / 8;
     wf.nAvgBytesPerSec = wf.nSamplesPerSec * wf.nBlockAlign;
-    waveOutOpen(&hWaveDev, WAVE_MAPPER, &wf, (DWORD)NULL, 0, CALLBACK_NULL);
+    waveOutOpen(&hWaveDev, WAVE_MAPPER, &wf, (DWORD)waveOutProc, 0, CALLBACK_FUNCTION);
     // 헤더는 건너 뛰고 버퍼에 샘플 데이터를 읽어들인다.
     SetFilePointer(hFile, 44, NULL, SEEK_SET);
-    filesize = GetFileSize(hFile, NULL) - 44;
-    samplebuf = (char*)malloc(filesize);
-    ReadFile(hFile, samplebuf, filesize, &dwRead, NULL);
-    // 헤더에 버퍼와 길이를 지정한다.
+    bufsize = wf.nAvgBytesPerSec;
+    samplebuf = (char*)malloc(bufsize);
     hdr.lpData = samplebuf;
-    hdr.dwBufferLength = filesize;
-    // 준비 및 출력한다.
-    waveOutPrepareHeader(hWaveDev, &hdr, sizeof(WAVEHDR));
-    waveOutWrite(hWaveDev, &hdr, sizeof(WAVEHDR));
-    // 다 재생할 때까지 대기한다.
-    _getch();
+    do {
+        ReadFile(hFile, samplebuf, bufsize, &dwRead, NULL);
+        printf("Read %d\n", dwRead);
+        hdr.dwBufferLength = dwRead;
+        waveOutPrepareHeader(hWaveDev, &hdr, sizeof(WAVEHDR));
+        waveOutWrite(hWaveDev, &hdr, sizeof(WAVEHDR));
+        // 대기가 풀릴 때까지 기다린다.
+        while (bWait) Sleep(0);
+        bWait = true;
+    } while (dwRead == bufsize);
     // 뒷정리한다.
     waveOutUnprepareHeader(hWaveDev, &hdr, sizeof(WAVEHDR));
     free(samplebuf);

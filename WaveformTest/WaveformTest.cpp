@@ -9,10 +9,15 @@ HANDLE hFile;
 DWORD dwRead;
 WAVEFORMATEX wf;
 const int hdrnum = 3;
-const int bufsize = 10000;
+const int bufsize = 30000;
+const int pktsize = 2000;
+WAVEHDR hdr[hdrnum];
+char samplebuf[hdrnum][bufsize];
 long availhdr = hdrnum;
 int nowhdr = 0;
-
+char pktbuf[pktsize];
+char* pktptr;
+char* bufptr;
 
 
 void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
@@ -37,7 +42,7 @@ int PlayWave(LPCTSTR song){
             i, cap.wChannels, cap.dwFormats, cap.dwSupport, devname);
     }
     */
-    WAVEHDR* hdr;
+
     // 웨이브 파일을 연다.
     hFile = CreateFile(song, GENERIC_READ, FILE_SHARE_READ, NULL,
        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -57,11 +62,9 @@ int PlayWave(LPCTSTR song){
     waveOutOpen(&hWaveDev, WAVE_MAPPER, &wf, (DWORD)waveOutProc, 0, CALLBACK_FUNCTION);
     // 헤더는 건너 뛰고 버퍼에 샘플 데이터를 읽어들인다.
     SetFilePointer(hFile, 44, NULL, SEEK_SET);
-    //헤더와 버퍼 한번에 할당
-    hdr = (WAVEHDR*)calloc(hdrnum, sizeof(WAVEHDR) + bufsize);
-    char* bufstart = (char*)hdr + sizeof(WAVEHDR) * hdrnum;
+
     for (int i = 0; i < hdrnum; i++) {
-        hdr[i].lpData = bufstart + bufsize * i;
+        hdr[i].lpData = samplebuf[i];
     }
     // 파일을 다 읽을 때까지 루프를 돈다.
     for (;;) {

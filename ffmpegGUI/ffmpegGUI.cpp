@@ -1,7 +1,6 @@
 ﻿//video -> 비트맵, 스레드, software scale, winapi(32)구조, usleep 등 사용
-//audio -> 
+//audio -> Waveform
 #pragma warning (disable : 6387)
-
 extern "C" {
 #include <libavcodec/avcodec.h>//디코더, 인코더
 #include <libavdevice/avdevice.h>//캡처 및 랜더링 기능 제공
@@ -12,22 +11,40 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libswresample/swresample.h>//오디오 리샘플링
 }
-
 #include <windows.h>//그래픽 환경
 #include <commctrl.h>//공통 컨트롤
 #include <tchar.h>//유니코드 문자열 처리
 #include <stdio.h>
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK StageWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK ListWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
+
 void OpenMovie(LPCTSTR movie);
 void CloseMovie();
 DWORD WINAPI PlayThread(LPVOID para);
 void uSleep(int64_t usec);
 DWORD WINAPI CallbackThread(LPVOID para);
+void Relayout(int width, int height);
+void OpenMediaFile(bool reset);
+void AdjustWindowSizePos(int width, int height);
+
+//패널내의 컨트롤ID. 패널의 높이
+enum {
+	ID_BTNOPEN = 1, ID_BTNPAUSE, ID_STTIME, ID_SLVOLUME,
+	ID_BTNEXIT, ID_BTNFULL, ID_BTNMAX, ID_BTNMIN
+};
+const int PanelHeight = 60;
 
 HINSTANCE g_hInst;
-LPCTSTR lpszClass = TEXT("MicroPlayer");
+LPCTSTR lpszClass = TEXT("플레이어");
 HWND hWndMain;
+HWND hPanel;
+HWND hBtnOpen, hBtnPause, hStTime, hVolume;
+HWND hBtnExit, hBtnFull, hBtnMax, hBtnMin;
+HWND hStage;
+HWND hListWnd;
 
 AVFormatContext* fmtCtx;
 int vidx, aidx;
@@ -63,6 +80,13 @@ struct sWave {
 sWave wa;
 SwrContext* swrCtx;
 DWORD CallbackThreadID;
+struct sOption {
+	bool listShow = true;
+	bool listRight = false;
+	int listWidth = 300;
+	int gap = 4;
+};
+sOption op;
 
 //Main
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
@@ -74,7 +98,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 
 	WndClass.cbClsExtra = 0;
 	WndClass.cbWndExtra = 0;
-	WndClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+	WndClass.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
 	WndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	WndClass.hIcon = LoadIcon(NULL, IDI_APPLICATION);
 	WndClass.hInstance = hInstance;
@@ -82,6 +106,27 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	WndClass.lpszClassName = lpszClass;
 	WndClass.lpszMenuName = NULL;
 	WndClass.style = 0;
+	RegisterClass(&WndClass);
+
+	WndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
+	WndClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+	WndClass.lpfnWndProc = (WNDPROC)StageWndProc;
+	WndClass.lpszClassName = TEXT("Stage");
+	WndClass.style = CS_DBLCLKS;
+	RegisterClass(&WndClass);
+
+	WndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
+	WndClass.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+	WndClass.lpfnWndProc = (WNDPROC)PanelWndProc;
+	WndClass.lpszClassName = TEXT("Panel");
+	WndClass.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+	RegisterClass(&WndClass);
+
+	WndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
+	WndClass.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+	WndClass.lpfnWndProc = (WNDPROC)ListWndProc;
+	WndClass.lpszClassName = TEXT("MediaList");
+	WndClass.style = CS_HREDRAW | CS_VREDRAW;
 	RegisterClass(&WndClass);
 
 	hWnd = CreateWindow(lpszClass, lpszClass, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
@@ -95,6 +140,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	}
 	return (int)Message.wParam;
 }
+
 //Window 프로시저
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
 	HDC hdc;
@@ -106,7 +152,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		InitCommonControls();
 		QueryPerformanceFrequency(&frequency);
 		CloseHandle(CreateThread(NULL, 0, CallbackThread, NULL, 0, &CallbackThreadID));
+
+		//WM_CREATE에서 child 윈도우를 생성하고 WM_SIZE에서 배치한다.
+		hStage = CreateWindow(TEXT("Stage"), NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+			0, 0, 0, 0, hWnd, (HMENU)NULL, g_hInst, NULL);
+		hPanel = CreateWindow(TEXT("Panel"), NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+			0, 0, 0, 0, hWnd, (HMENU)NULL, g_hInst, NULL);
+		hListWnd = CreateWindowEx(WS_EX_CLIENTEDGE, TEXT("MediaList"), NULL,
+			WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+			0, 0, 0, 0, hWnd, (HMENU)NULL, g_hInst, NULL);
 		OpenMovie(TEXT("c:\\ffstudy\\sample.mp4"));
+		return 0;
+	case WM_SIZE:
+		Relayout(LOWORD(lParam), HIWORD(lParam));
 		return 0;
 	case WM_PAINT:
 		hdc = BeginPaint(hWnd, &ps);
@@ -119,6 +177,62 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	}
 	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
 }
+
+LRESULT CALLBACK StageWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
+	switch (iMessage) {
+	case WM_CREATE:
+		return 0;
+	}
+	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
+}
+
+LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
+	HDC hdc;
+	PAINTSTRUCT ps;
+
+	switch (iMessage) {
+	case WM_CREATE:
+		hBtnExit = CreateWindow(TEXT("button"), TEXT("X"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNEXIT, g_hInst, NULL);
+		hBtnFull = CreateWindow(TEXT("button"), TEXT("F"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNFULL, g_hInst, NULL);
+		hBtnMax = CreateWindow(TEXT("button"), TEXT("M"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNMAX, g_hInst, NULL);
+		hBtnMin = CreateWindow(TEXT("button"), TEXT("_"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNMIN, g_hInst, NULL);
+		hBtnOpen = CreateWindow(TEXT("button"), TEXT("Open"), WS_CHILD | WS_VISIBLE,
+			10, 5, 80, 25, hWnd, (HMENU)ID_BTNOPEN, g_hInst, NULL);
+		hBtnPause = CreateWindow(TEXT("button"), TEXT("Pause"), WS_CHILD | WS_VISIBLE,
+			100, 5, 80, 25, hWnd, (HMENU)ID_BTNPAUSE, g_hInst, NULL);
+		hStTime = CreateWindow(TEXT("static"), TEXT(""), WS_CHILD | WS_VISIBLE,
+			200, 10, 120, 25, hWnd, (HMENU)ID_STTIME, g_hInst, NULL);
+		CreateWindow(TEXT("static"), TEXT("Volume"), WS_CHILD | WS_VISIBLE,
+			330, 10, 60, 25, hWnd, (HMENU)-1, g_hInst, NULL);
+		hVolume = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE,
+			390, 5, 100, 25, hWnd, (HMENU)ID_SLVOLUME, g_hInst, NULL);
+		return 0;
+	case WM_PAINT:
+		hdc = BeginPaint(hWnd, &ps);
+		EndPaint(hWnd, &ps);
+		return 0;
+	case WM_SIZE:
+		MoveWindow(hBtnExit, LOWORD(lParam) - 35, 5, 25, 25, TRUE);
+		MoveWindow(hBtnFull, LOWORD(lParam) - 65, 5, 25, 25, TRUE);
+		MoveWindow(hBtnMax, LOWORD(lParam) - 95, 5, 25, 25, TRUE);
+		MoveWindow(hBtnMin, LOWORD(lParam) - 125, 5, 25, 25, TRUE);
+		return 0;
+	}
+	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
+}
+
+LRESULT CALLBACK ListWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
+	switch (iMessage) {
+	case WM_CREATE:
+		return 0;
+	}
+	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
+}
+
 //코덱 오픈
 void OpenMovie(LPCTSTR movie) {
 	char MoviePathAnsi[MAX_PATH];
@@ -152,6 +266,7 @@ void OpenMovie(LPCTSTR movie) {
 	hPlayThread = CreateThread(NULL, 0, PlayThread, NULL, 0, &ThreadID);
 	isOpen = true;
 }
+
 //쓰레드 닫기
 void CloseMovie() {
 	status = P_EXIT;
@@ -164,7 +279,7 @@ DWORD WINAPI PlayThread(LPVOID para) {
 	AVPacket packet = { 0, };
 	AVFrame vFrame = { 0, }, aFrame = { 0, };
 	HDC hdc;
-	hdc = GetDC(hWndMain);
+	hdc = GetDC(hStage);
 	HDC MemDC;
 	HBITMAP OldBitmap;
 	MemDC = CreateCompatibleDC(hdc);
@@ -301,7 +416,7 @@ DWORD WINAPI PlayThread(LPVOID para) {
 	av_frame_unref(&vFrame);
 	av_frame_unref(&aFrame);
 	DeleteDC(MemDC);
-	ReleaseDC(hWndMain, hdc);
+	ReleaseDC(hStage, hdc);
 
 	if (status == P_EXIT) {
 		waveOutReset(wa.hWaveDev);
@@ -340,4 +455,28 @@ DWORD WINAPI CallbackThread(LPVOID para) {
 		}
 	}
 	return (int)Message.wParam;
+}
+void Relayout(int width, int height) {
+	int lwidth, lgap;
+
+	if (op.listShow) {
+		lwidth = op.listWidth;
+		lgap = op.gap;
+		ShowWindow(hListWnd, SW_SHOW);
+	}
+	else {
+		lwidth = 0;
+		lgap = 0;
+		ShowWindow(hListWnd, SW_HIDE);
+	}
+	if (op.listRight) {
+		MoveWindow(hListWnd, width - lwidth, 0, lwidth, height, TRUE);
+		MoveWindow(hStage, 0, 0, width - lwidth - lgap, height - PanelHeight, TRUE);
+		MoveWindow(hPanel, 0, height - PanelHeight, width - lwidth, PanelHeight, TRUE);
+	}
+	else {
+		MoveWindow(hListWnd, 0, 0, lwidth, height, TRUE);
+		MoveWindow(hStage, lwidth + lgap, 0, width - lwidth - lgap, height - PanelHeight, TRUE);
+		MoveWindow(hPanel, lwidth, height - PanelHeight, width - lwidth, PanelHeight, TRUE);
+	}
 }

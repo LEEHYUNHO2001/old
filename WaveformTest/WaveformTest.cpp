@@ -1,5 +1,4 @@
 ﻿#include <stdio.h>
-#include <conio.h>
 #include <windows.h>
 
 #pragma comment(lib, "winmm.lib")
@@ -9,7 +8,7 @@ HANDLE hFile;
 DWORD dwRead;
 WAVEFORMATEX wf;
 const int hdrnum = 3;
-const int bufsize = 30000;
+const int bufsize = 3000;
 const int pktsize = 2000;
 WAVEHDR hdr[hdrnum];
 char samplebuf[hdrnum][bufsize];
@@ -63,26 +62,55 @@ int PlayWave(LPCTSTR song){
     // 헤더는 건너 뛰고 버퍼에 샘플 데이터를 읽어들인다.
     SetFilePointer(hFile, 44, NULL, SEEK_SET);
 
+    //ipData멤버로 두 메모리 연결
     for (int i = 0; i < hdrnum; i++) {
         hdr[i].lpData = samplebuf[i];
     }
-    // 파일을 다 읽을 때까지 루프를 돈다.
+    // 샘플 버퍼 포인터 초기화.
+    bufptr = samplebuf[nowhdr];
+
+    // 파일을 다 읽을 때까지 반복
     for (;;) {
-        ReadFile(hFile, hdr[nowhdr].lpData, bufsize, &dwRead, NULL);
-        if (dwRead == 0) break;
-        hdr[nowhdr].dwBufferLength = dwRead;
-        // 출력 장치로 전송
-        waveOutPrepareHeader(hWaveDev, &hdr[nowhdr], sizeof(WAVEHDR));
-        waveOutWrite(hWaveDev, &hdr[nowhdr], sizeof(WAVEHDR));
-        // 가용 버퍼 하나 감소
-        InterlockedDecrement(&availhdr);
-        // 가용 버퍼가 없으면 풀릴 때까지 대기
-        while (availhdr == 0) Sleep(20);
-        // 다음 버퍼 위치로 이동
-        if (++nowhdr == hdrnum) nowhdr = 0;
-    }
-    for (int i = 0; i < hdrnum; i++) {
-        waveOutUnprepareHeader(hWaveDev, &hdr[i], sizeof(WAVEHDR));
+        ReadFile(hFile, pktbuf, pktsize, &dwRead, NULL);
+
+        // 파일 끝 도달했으면 나머지 샘플 데이터 보내고 종료한다.
+        if (dwRead == 0) {
+            hdr[nowhdr].dwBufferLength = bufptr - samplebuf[nowhdr];
+            waveOutPrepareHeader(hWaveDev, &hdr[nowhdr], sizeof(WAVEHDR));
+            waveOutWrite(hWaveDev, &hdr[nowhdr], sizeof(WAVEHDR));
+            InterlockedDecrement(&availhdr);
+            break;
+        }
+        // 패킷 포인터 초기화. 남은 패킷 초기화
+        pktptr = pktbuf;
+        int remainpkt = dwRead;
+
+        // 패킷 하나를 다 쓸 때까지 반복한다.
+        for (;;) {
+            int remainbuf = bufsize - (bufptr - samplebuf[nowhdr]);
+
+            // 버퍼 남은양보다 패킷이 더 작으면 채워 넣고 버퍼 포인터 이동 후 파일 읽기 루틴으로 돌아간다.
+            if (remainpkt < remainbuf) {
+                memcpy(bufptr, pktptr, remainpkt);
+                bufptr += remainpkt;
+                break;
+            }
+            // 패킷이 더 많으면 남은 버퍼를 가득 채운다.
+            memcpy(bufptr, pktptr, remainbuf);
+            // 쓴만큼 패킷은 감소하고 버퍼 포인터는 뒤로 이동한다.
+            remainpkt -= remainbuf;
+            pktptr += remainbuf;
+            //버퍼 가득 채운 해더 장비로 보내고 다음헤더 이동
+            hdr[nowhdr].dwBufferLength = bufsize;
+            waveOutPrepareHeader(hWaveDev, &hdr[nowhdr], sizeof(WAVEHDR));
+            waveOutWrite(hWaveDev, &hdr[nowhdr], sizeof(WAVEHDR));
+            InterlockedDecrement(&availhdr);
+            while (availhdr == 0) Sleep(20);
+
+            // 다음 버퍼로 이동하고 버퍼 포인터를 초기화한다.
+            if (++nowhdr == hdrnum) nowhdr = 0;
+            bufptr = samplebuf[nowhdr];
+        }
     }
     while (waveOutClose(hWaveDev) == WAVERR_STILLPLAYING) { Sleep(10); }
     CloseHandle(hFile);
@@ -90,5 +118,5 @@ int PlayWave(LPCTSTR song){
 }
 
 int main() {
-    PlayWave(TEXT("c:\\ffstudy\\techno.wav"));
+    PlayWave(TEXT("c:\\ffstudy\\takeonme.wav"));
 }

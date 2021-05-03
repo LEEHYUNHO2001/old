@@ -1,5 +1,6 @@
 ﻿//video -> 비트맵, 스레드, software scale, winapi(32)구조, usleep 등 사용
 //audio -> Waveform
+//UI
 #pragma warning (disable : 6387)
 extern "C" {
 #include <libavcodec/avcodec.h>//디코더, 인코더
@@ -41,10 +42,11 @@ HINSTANCE g_hInst;
 LPCTSTR lpszClass = TEXT("플레이어");
 HWND hWndMain;
 HWND hPanel;
-HWND hBtnOpen, hBtnPause, hStTime, hVolume;
-HWND hBtnExit, hBtnFull, hBtnMax, hBtnMin;
 HWND hStage;
 HWND hListWnd;
+HWND hBtnOpen, hBtnPause, hStTime, hVolume;
+HWND hBtnExit, hBtnFull, hBtnMax, hBtnMin;
+
 
 AVFormatContext* fmtCtx;
 int vidx, aidx;
@@ -221,6 +223,13 @@ LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lP
 		MoveWindow(hBtnMax, LOWORD(lParam) - 95, 5, 25, 25, TRUE);
 		MoveWindow(hBtnMin, LOWORD(lParam) - 125, 5, 25, 25, TRUE);
 		return 0;
+	case WM_COMMAND:
+		switch (LOWORD(wParam)) {
+		case ID_BTNOPEN:
+			OpenMediaFile(true);
+			break;
+		}
+		return 0;
 	}
 	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
 }
@@ -236,6 +245,13 @@ LRESULT CALLBACK ListWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lPa
 //코덱 오픈
 void OpenMovie(LPCTSTR movie) {
 	char MoviePathAnsi[MAX_PATH];
+	//재생중인 파일 중지.
+	TCHAR Title[MAX_PATH + 10];
+	if (isOpen) {
+		CloseMovie();
+	}
+	status = P_STOP;
+
 	WideCharToMultiByte(CP_ACP, 0, movie, -1, MoviePathAnsi, MAX_PATH, NULL, NULL);
 
 	int ret = avformat_open_input(&fmtCtx, MoviePathAnsi, NULL, NULL);
@@ -244,6 +260,10 @@ void OpenMovie(LPCTSTR movie) {
 		MessageBox(hWndMain, TEXT("동영상 파일이 없습니다."), TEXT("알림"), MB_OK);
 		return;
 	}
+	//hWndMain 설정
+	wsprintf(Title, TEXT("%s - %s"), lpszClass, movie);
+	SetWindowText(hWndMain, Title);
+
 	avformat_find_stream_info(fmtCtx, NULL);
 	vidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
 	aidx = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_AUDIO, -1, vidx, NULL, 0);
@@ -263,6 +283,13 @@ void OpenMovie(LPCTSTR movie) {
 		avcodec_parameters_to_context(aCtx, aPara);
 		avcodec_open2(aCtx, aCodec, NULL);
 	}
+	if (vidx >= 0) {
+		AdjustWindowSizePos(vPara->width, vPara->height);
+	} else {
+		AdjustWindowSizePos(500, 300);
+		InvalidateRect(hWndMain, NULL, TRUE);
+	}
+
 	hPlayThread = CreateThread(NULL, 0, PlayThread, NULL, 0, &ThreadID);
 	isOpen = true;
 }
@@ -456,6 +483,7 @@ DWORD WINAPI CallbackThread(LPVOID para) {
 	}
 	return (int)Message.wParam;
 }
+//레이아웃
 void Relayout(int width, int height) {
 	int lwidth, lgap;
 
@@ -480,3 +508,64 @@ void Relayout(int width, int height) {
 		MoveWindow(hPanel, lwidth, height - PanelHeight, width - lwidth, PanelHeight, TRUE);
 	}
 }
+//파일 오픈
+void OpenMediaFile(bool reset) {
+	OPENFILENAME OFN;
+	TCHAR MoviePath[MAX_PATH] = TEXT("");
+
+	memset(&OFN, 0, sizeof(OPENFILENAME));
+	OFN.lStructSize = sizeof(OPENFILENAME);
+	OFN.hwndOwner = hWndMain;
+	OFN.lpstrFilter = TEXT("모든 파일(*.*)\0*.*\0");
+	OFN.lpstrFile = MoviePath;
+	OFN.nMaxFile = MAX_PATH;
+	if (GetOpenFileName(&OFN) != 0) {
+		OpenMovie(MoviePath);
+	}
+}
+//윈도우 크기 조정
+void AdjustWindowSizePos(int width, int height) {
+	RECT crt, wrt;
+
+	if (IsZoomed(hWndMain)) {
+		return;
+	}
+
+	if (op.listShow) {
+		SetRect(&crt, 0, 0, width + op.listWidth + op.gap, height + PanelHeight);
+	}
+	else {
+		SetRect(&crt, 0, 0, width, height + PanelHeight);
+	}
+	AdjustWindowRect(&crt, WS_OVERLAPPEDWINDOW, FALSE);
+	GetWindowRect(hWndMain, &wrt);
+	wrt.right = wrt.left + (crt.right - crt.left);
+	wrt.bottom = wrt.top + (crt.bottom - crt.top);
+
+	//모니터
+	/*HMONITOR hMon = MonitorFromRect(&wrt, MONITOR_DEFAULTTOPRIMARY);
+	MONITORINFO mi = { sizeof(MONITORINFO), };
+	GetMonitorInfo(hMon, &mi);
+
+	if (wrt.right - wrt.left > mi.rcWork.right - mi.rcWork.left) {
+		wrt.right = wrt.left + mi.rcWork.right - mi.rcWork.left;
+	}
+	if (wrt.bottom - wrt.top > mi.rcWork.bottom - mi.rcWork.top) {
+		wrt.bottom = wrt.top + mi.rcWork.bottom - mi.rcWork.top;
+	}
+
+	int xdiff = wrt.right - mi.rcWork.right;
+	if (xdiff > 0) {
+		wrt.left -= xdiff;
+		wrt.right -= xdiff;
+	}
+	int ydiff = wrt.bottom - mi.rcWork.bottom;
+	if (ydiff > 0) {
+		wrt.top -= ydiff;
+		wrt.bottom -= ydiff;
+	}*/
+
+	SetWindowPos(hWndMain, NULL, wrt.left, wrt.top, wrt.right - wrt.left, wrt.bottom - wrt.top,
+		SWP_NOZORDER);
+}
+

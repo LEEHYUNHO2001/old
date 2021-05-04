@@ -1,94 +1,10 @@
 ﻿//video -> 비트맵, 스레드, software scale, winapi(32)구조, usleep 등 사용
 //audio -> Waveform
-//UI
-#pragma warning (disable : 6387)
-extern "C" {
-#include <libavcodec/avcodec.h>//디코더, 인코더
-#include <libavdevice/avdevice.h>//캡처 및 랜더링 기능 제공
-#include <libavfilter/avfilter.h>//미디어 필터
-#include <libavformat/avformat.h>//컨테이너 먹서, 디먹서
-#include <libavutil/avutil.h>//난수 생성기, 수학 루틴 등의 유틸리티 기능 제공
-#include <libswscale/swscale.h>//이미지 스케일링, 색상 변환
-#include <libavutil/imgutils.h>
-#include <libswresample/swresample.h>//오디오 리샘플링
-}
-#include <windows.h>//그래픽 환경
-#include <commctrl.h>//공통 컨트롤
-#include <tchar.h>//유니코드 문자열 처리
-#include <stdio.h>
-
-LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
-LRESULT CALLBACK StageWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
-LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
-LRESULT CALLBACK ListWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
-
-void OpenMovie(LPCTSTR movie);
-void CloseMovie();
-DWORD WINAPI PlayThread(LPVOID para);
-void uSleep(int64_t usec);
-DWORD WINAPI CallbackThread(LPVOID para);
-void Relayout(int width, int height);
-void OpenMediaFile(bool reset);
-void AdjustWindowSizePos(int width, int height);
-
-//패널내의 컨트롤ID. 패널의 높이
-enum {
-	ID_BTNOPEN = 1, ID_BTNPAUSE, ID_STTIME, ID_SLVOLUME,
-	ID_BTNEXIT, ID_BTNFULL, ID_BTNMAX, ID_BTNMIN
-};
-const int PanelHeight = 60;
-
-HINSTANCE g_hInst;
-LPCTSTR lpszClass = TEXT("플레이어");
-HWND hWndMain;
-HWND hPanel;
-HWND hStage;
-HWND hListWnd;
-HWND hBtnOpen, hBtnPause, hStTime, hVolume;
-HWND hBtnExit, hBtnFull, hBtnMax, hBtnMin;
-
-
-AVFormatContext* fmtCtx;
-int vidx, aidx;
-AVStream* vStream, * aStream;
-AVCodecParameters* vPara, * aPara;
-AVCodec* vCodec, * aCodec;
-AVCodecContext* vCtx, * aCtx;
-SwsContext* swsCtx;
-AVFrame RGBFrame;
-uint8_t* rgbbuf;
-
-bool isOpen;
-DWORD ThreadID;
-HANDLE hPlayThread;
-enum ePlayStatus { P_STOP, P_RUN, P_EXIT, P_EOF };
-ePlayStatus status = ePlayStatus::P_STOP;
-LARGE_INTEGER frequency;
-
-struct sWave {
-	HWAVEOUT hWaveDev;
-	WAVEFORMATEX wf;
-	static const int hdrnum = 10;
-	static const int bufsize = 17640;
-	static const int pktsize = 20000;
-	WAVEHDR hdr[hdrnum];
-	char samplebuf[hdrnum][bufsize];
-	long availhdr;
-	int nowhdr;
-	char* pktbuf;
-	char* pktptr;
-	char* bufptr;
-};
-sWave wa;
-SwrContext* swrCtx;
-DWORD CallbackThreadID;
-struct sOption {
-	bool listShow = true;
-	bool listRight = false;
-	int listWidth = 300;
-	int gap = 4;
-};
-sOption op;
+//UI -> Open, 드래그(Stage, List), 글 목록
+#include "header.h"
+#include "struct.h"
+#include "function.h"
+#include "variable.h"
 
 //Main
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
@@ -97,7 +13,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	MSG Message;
 	WNDCLASS WndClass;
 	g_hInst = hInstance;
-
+	//WndProc
 	WndClass.cbClsExtra = 0;
 	WndClass.cbWndExtra = 0;
 	WndClass.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
@@ -109,21 +25,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	WndClass.lpszMenuName = NULL;
 	WndClass.style = 0;
 	RegisterClass(&WndClass);
-
+	//StageWndProc
 	WndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	WndClass.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
 	WndClass.lpfnWndProc = (WNDPROC)StageWndProc;
 	WndClass.lpszClassName = TEXT("Stage");
 	WndClass.style = CS_DBLCLKS;
 	RegisterClass(&WndClass);
-
+	//PanelWndProc
 	WndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	WndClass.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
 	WndClass.lpfnWndProc = (WNDPROC)PanelWndProc;
 	WndClass.lpszClassName = TEXT("Panel");
 	WndClass.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
 	RegisterClass(&WndClass);
-
+	//ListWndProc
 	WndClass.hCursor = LoadCursor(NULL, IDC_ARROW);
 	WndClass.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
 	WndClass.lpfnWndProc = (WNDPROC)ListWndProc;
@@ -135,7 +51,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
 		NULL, (HMENU)NULL, hInstance, NULL);
 	ShowWindow(hWnd, nCmdShow);
-
+	
 	while (GetMessage(&Message, NULL, 0, 0)) {
 		TranslateMessage(&Message);
 		DispatchMessage(&Message);
@@ -163,10 +79,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		hListWnd = CreateWindowEx(WS_EX_CLIENTEDGE, TEXT("MediaList"), NULL,
 			WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
 			0, 0, 0, 0, hWnd, (HMENU)NULL, g_hInst, NULL);
-		OpenMovie(TEXT("c:\\ffstudy\\sample.mp4"));
+		OpenMovie(TEXT("c:\\ffstudy\\sample1.mp4"));
 		return 0;
 	case WM_SIZE:
 		Relayout(LOWORD(lParam), HIWORD(lParam));
+		return 0;
+	case WM_MEDIA_DONE:
+		if (arMedia[nowlist].nowsel < arMedia[nowlist].num - 1) {
+			ChangeMedia(nowlist, arMedia[nowlist].nowsel + 1);
+		}
 		return 0;
 	case WM_PAINT:
 		hdc = BeginPaint(hWnd, &ps);
@@ -179,15 +100,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	}
 	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
 }
-
+//StageWndProc
 LRESULT CALLBACK StageWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
 	switch (iMessage) {
 	case WM_CREATE:
+		DragAcceptFiles(hWnd, TRUE);
+		return 0;
+	//DropFile 받는 대상에 추가
+	case WM_DROPFILES:
+		DropFiles((HDROP)wParam, true);
 		return 0;
 	}
 	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
 }
-
+//PanelWndProc
 LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
 	HDC hdc;
 	PAINTSTRUCT ps;
@@ -212,6 +138,12 @@ LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lP
 			330, 10, 60, 25, hWnd, (HMENU)-1, g_hInst, NULL);
 		hVolume = CreateWindow(TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE,
 			390, 5, 100, 25, hWnd, (HMENU)ID_SLVOLUME, g_hInst, NULL);
+
+		SendMessage(hVolume, TBM_SETRANGE, FALSE, MAKELPARAM(0, 100));
+		DWORD voldevice, vol;
+		waveOutGetVolume(wa.hWaveDev, &voldevice);
+		vol = DWORD(LOWORD(voldevice) * 100.0 / 0xffff + 0.5);
+		SendMessage(hVolume, TBM_SETPOS, TRUE, vol);
 		return 0;
 	case WM_PAINT:
 		hdc = BeginPaint(hWnd, &ps);
@@ -233,15 +165,163 @@ LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lP
 	}
 	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
 }
-
+//ListWndProc
 LRESULT CALLBACK ListWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
+	TCITEM tie;
+	LVCOLUMN COL;
+
 	switch (iMessage) {
 	case WM_CREATE:
+		//드래그 사용
+		DragAcceptFiles(hWnd, TRUE);
+		//목록 탭
+		hListTab = CreateWindow(WC_TABCONTROL, TEXT(""), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+			0, 0, 0, 0, hWnd, (HMENU)0, g_hInst, NULL);
+		hBtnListMenu = CreateWindow(TEXT("button"), TEXT("M"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNLISTMENU, g_hInst, NULL);
+		tie.mask = TCIF_TEXT;
+		for (int i = 0; i < listnum; i++) {
+			tie.pszText = arMedia[i].name;
+			TabCtrl_InsertItem(hListTab, i, &tie);
+		}
+		//파일 정보 UI
+		hList = CreateWindow(WC_LISTVIEW, NULL, WS_CHILD | WS_VISIBLE |
+			LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 0, 0, hWnd, NULL, g_hInst, NULL);
+		ListView_SetExtendedListViewStyle(hList, LVS_EX_FULLROWSELECT);
+		COL.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+		COL.fmt = LVCFMT_LEFT;
+		COL.cx = 200;
+		COL.pszText = (TCHAR*)TEXT("이름");
+		COL.iSubItem = 0;
+		SendMessage(hList, LVM_INSERTCOLUMN, 0, (LPARAM)&COL);
+
+		COL.cx = 50;
+		COL.pszText = (TCHAR*)TEXT("시간");
+		COL.iSubItem = 1;
+		SendMessage(hList, LVM_INSERTCOLUMN, 1, (LPARAM)&COL);
+
+		COL.cx = 50;
+		COL.pszText = (TCHAR*)TEXT("크기");
+		COL.iSubItem = 2;
+		SendMessage(hList, LVM_INSERTCOLUMN, 2, (LPARAM)&COL);
+		//+ - D 버튼
+		hBtnListAdd = CreateWindow(TEXT("button"), TEXT("+"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNLISTADD, g_hInst, NULL);
+		hBtnListRemove = CreateWindow(TEXT("button"), TEXT("-"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNLISTREMOVE, g_hInst, NULL);
+		hBtnListDel = CreateWindow(TEXT("button"), TEXT("D"), WS_CHILD | WS_VISIBLE,
+			0, 0, 0, 0, hWnd, (HMENU)ID_BTNLISTDEL, g_hInst, NULL);
+		return 0;
+	case WM_SIZE:
+		//버튼 위치
+		MoveWindow(hListTab, 0, 0, LOWORD(lParam) - 30, 30, TRUE);
+		MoveWindow(hBtnListMenu, LOWORD(lParam) - 30, 0, 30, 30, TRUE);
+		MoveWindow(hList, 0, 30, LOWORD(lParam), HIWORD(lParam) - 65, TRUE);
+		MoveWindow(hBtnListAdd, 5, HIWORD(lParam) - 30, 25, 25, TRUE);
+		MoveWindow(hBtnListRemove, 35, HIWORD(lParam) - 30, 25, 25, TRUE);
+		MoveWindow(hBtnListDel, 65, HIWORD(lParam) - 30, 25, 25, TRUE);
+		return 0;
+	case WM_COMMAND:
+		switch (LOWORD(wParam)) {
+		//M 버튼
+		case ID_BTNLISTMENU:
+			HMENU hPopup;
+			hPopup = CreatePopupMenu();
+			AppendMenu(hPopup, MF_STRING, 40001, TEXT("추가"));
+			AppendMenu(hPopup, MF_STRING, 40002, TEXT("삭제"));
+			AppendMenu(hPopup, MF_STRING, 40003, TEXT("이름 변경"));
+			UINT id;
+			POINT pt;
+			GetCursorPos(&pt);
+			id = TrackPopupMenu(hPopup, TPM_LEFTALIGN | TPM_RETURNCMD,
+				pt.x, pt.y, 0, hWnd, NULL);
+			switch (id) {
+			case 40001:
+				//탭 10개까지만 생성 가능
+				if (listnum < maxlist) {
+					listnum++;
+					nowlist = TabCtrl_GetItemCount(hListTab);
+					arMedia[nowlist].Clear();
+					ListView_DeleteAllItems(hList);
+					tie.mask = TCIF_TEXT;
+					lstrcpy(arMedia[nowlist].name, TEXT("새목록"));
+					tie.pszText = arMedia[nowlist].name;
+					TabCtrl_InsertItem(hListTab, nowlist, &tie);
+					TabCtrl_SetCurSel(hListTab, nowlist);
+				}
+				break;
+			case 40002:
+				if (listnum > 1) {
+					arMedia[nowlist].Uninit();
+					for (int i = nowlist + 1; i < listnum; i++) {
+						arMedia[i - 1] = arMedia[i];
+					}
+					listnum--;
+					arMedia[listnum].ar = NULL;
+					TabCtrl_DeleteItem(hListTab, nowlist);
+					if (nowlist >= listnum) {
+						nowlist--;
+					}
+					TabCtrl_SetCurSel(hListTab, nowlist);
+					FillList(nowlist);
+				}
+				break;
+			case 40003:
+				TCHAR newName[64];
+				lstrcpy(newName, TEXT("바꾼이름"));
+				lstrcpy(arMedia[nowlist].name, newName);
+				tie.mask = TCIF_TEXT;
+				tie.pszText = newName;
+				TabCtrl_SetItem(hListTab, nowlist, &tie);
+				break;
+			}
+			DestroyMenu(hPopup);
+			break;
+		case ID_BTNLISTADD:
+			OpenMediaFile(false);
+			break;
+		case ID_BTNLISTREMOVE:
+		case ID_BTNLISTDEL:
+			int idx;
+			idx = ListView_GetNextItem(hList, -1, LVNI_ALL | LVNI_SELECTED);
+			while (idx != -1) {
+				ListView_DeleteItem(hList, idx);
+				arMedia[nowlist].Delete(idx);
+				if (LOWORD(lParam) == ID_BTNLISTDEL) {
+					// 휴지통으로 보낼 것
+				}
+				idx = ListView_GetNextItem(hList, idx - 1, LVNI_ALL | LVNI_SELECTED);
+			}
+			break;
+		}
+		return 0;
+	case WM_DROPFILES:
+		DropFiles((HDROP)wParam, false);
+		return 0;
+	case WM_NOTIFY:
+		LPNMHDR hdr;
+		hdr = (LPNMHDR)lParam;
+
+		if (hdr->hwndFrom == hList) {
+			switch (hdr->code) {
+			case NM_DBLCLK:
+				LPNMITEMACTIVATE nia;
+				nia = (LPNMITEMACTIVATE)lParam;
+				ChangeMedia(nowlist, nia->iItem);
+			}
+		}
+		if (hdr->hwndFrom == hListTab) {
+			switch (hdr->code) {
+			case TCN_SELCHANGE:
+				nowlist = TabCtrl_GetCurSel(hListTab);
+				FillList(nowlist);
+				break;
+			}
+		}
 		return 0;
 	}
 	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
 }
-
 //코덱 오픈
 void OpenMovie(LPCTSTR movie) {
 	char MoviePathAnsi[MAX_PATH];
@@ -293,7 +373,6 @@ void OpenMovie(LPCTSTR movie) {
 	hPlayThread = CreateThread(NULL, 0, PlayThread, NULL, 0, &ThreadID);
 	isOpen = true;
 }
-
 //쓰레드 닫기
 void CloseMovie() {
 	status = P_EXIT;
@@ -459,6 +538,11 @@ DWORD WINAPI PlayThread(LPVOID para) {
 	if (aCtx) { avcodec_free_context(&aCtx); }
 	if (fmtCtx) { avformat_close_input(&fmtCtx); }
 	isOpen = false;
+	//정상으로 끝나면 메세지 보냄. 아니면 P_STOP
+	if (status == P_EOF) {
+		PostMessage(hWndMain, WM_MEDIA_DONE, 0, 0);
+	}
+	status = P_STOP;
 	return 0;
 }
 //대기
@@ -508,19 +592,51 @@ void Relayout(int width, int height) {
 		MoveWindow(hPanel, lwidth, height - PanelHeight, width - lwidth, PanelHeight, TRUE);
 	}
 }
-//파일 오픈
+//파일 오픈, + 버튼
 void OpenMediaFile(bool reset) {
 	OPENFILENAME OFN;
-	TCHAR MoviePath[MAX_PATH] = TEXT("");
+	TCHAR* MoviePath;
+	TCHAR* p;
+	TCHAR Dir[MAX_PATH];
+	TCHAR FilePath[MAX_PATH];
 
 	memset(&OFN, 0, sizeof(OPENFILENAME));
 	OFN.lStructSize = sizeof(OPENFILENAME);
 	OFN.hwndOwner = hWndMain;
 	OFN.lpstrFilter = TEXT("모든 파일(*.*)\0*.*\0");
+	MoviePath = (TCHAR*)calloc(MAX_PATH, 1000);
 	OFN.lpstrFile = MoviePath;
-	OFN.nMaxFile = MAX_PATH;
-	if (GetOpenFileName(&OFN) != 0) {
-		OpenMovie(MoviePath);
+	OFN.nMaxFile = MAX_PATH * 100;
+	OFN.Flags = OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+	if (GetOpenFileName(&OFN) == 0) {
+		return;
+	}
+
+	p = MoviePath;
+	if (reset) {
+		arMedia[nowlist].Clear();
+		ListView_DeleteAllItems(hList);
+	}
+	lstrcpy(Dir, MoviePath);
+	p = p + lstrlen(Dir) + 1;
+
+	if (*p == 0) {
+		AppendMedia(nowlist, Dir, true);
+	}
+	else {
+		for (; *p; p += lstrlen(p) + 1) {
+			lstrcpy(FilePath, Dir);
+			lstrcat(FilePath, TEXT("\\"));
+			lstrcat(FilePath, p);
+			AppendMedia(nowlist, FilePath, true);
+		}
+	}
+	free(MoviePath);
+
+	if (reset) {
+		if (arMedia[nowlist].num != 0) {
+			ChangeMedia(nowlist, 0);
+		}
 	}
 }
 //윈도우 크기 조정
@@ -568,4 +684,112 @@ void AdjustWindowSizePos(int width, int height) {
 	SetWindowPos(hWndMain, NULL, wrt.left, wrt.top, wrt.right - wrt.left, wrt.bottom - wrt.top,
 		SWP_NOZORDER);
 }
+//동영상 점검 후 정보 sMedia 구조체에 채움.
+bool GetMediaInfo(TCHAR* Path, sMedia* pMedia) {
+	char MoviePathAnsi[MAX_PATH];
+	AVFormatContext* t_fmtCtx = NULL;
+	HANDLE hFile;
+	LARGE_INTEGER size;
 
+	WideCharToMultiByte(CP_ACP, 0, Path, -1, MoviePathAnsi, MAX_PATH, NULL, NULL);
+	int ret = avformat_open_input(&t_fmtCtx, MoviePathAnsi, NULL, NULL);
+	if (ret != 0) {
+		return false;
+	}
+	lstrcpy(pMedia->Path, Path);
+	avformat_find_stream_info(t_fmtCtx, NULL);
+	pMedia->duration = t_fmtCtx->duration;
+	avformat_close_input(&t_fmtCtx);
+
+	hFile = CreateFile(Path, 0, 0, NULL, OPEN_EXISTING, 0, NULL);
+	if (hFile == INVALID_HANDLE_VALUE) {
+		return FALSE;
+	}
+	GetFileSizeEx(hFile, &size);
+	pMedia->size = size.QuadPart;
+	CloseHandle(hFile);
+
+	return true;
+}
+//목록에 파일 추가
+bool AppendMedia(int list, TCHAR* MediaPath, bool tolist) {
+	sMedia movie;
+
+	if (GetMediaInfo(MediaPath, &movie)) {
+		AppendMedia(list, movie, tolist);
+		return true;
+	}
+	return false;
+}
+void AppendMedia(int list, sMedia media, bool tolist) {
+	arMedia[list].Append(media);
+
+	if (tolist) {
+		AppendMediaToList(media);
+	}
+}
+void AppendMediaToList(sMedia media) {
+	LVITEM LI;
+	TCHAR buf[32];
+
+	LI.mask = LVIF_TEXT;
+	//경로
+	LI.iSubItem = 0;
+	LI.iItem = ListView_GetItemCount(hList);
+	LI.pszText = PathFindFileName(media.Path);
+	SendMessage(hList, LVM_INSERTITEM, 0, (LPARAM)&LI);
+	//시간
+	LI.iSubItem = 1;
+	int sec = int(media.duration / AV_TIME_BASE);
+	if (sec >= 3600) {
+		wsprintf(buf, TEXT("%d:%d:%d"), sec / 3600, sec % 3600 / 60, sec % 60);
+	}
+	else {
+		wsprintf(buf, TEXT("%d:%d"), sec / 60, sec % 60);
+	}
+	LI.pszText = buf;
+	SendMessage(hList, LVM_SETITEM, 0, (LPARAM)&LI);
+	//크기
+	LI.iSubItem = 2;
+	wsprintf(buf, TEXT("%dM"), int(media.size / 1000000));
+	LI.pszText = buf;
+	SendMessage(hList, LVM_SETITEM, 0, (LPARAM)&LI);
+}
+//파일 관련 기능 -> 쉘 사용 -> arMedia 목록 전체를 리스트 뷰에 채움.
+void FillList(int list) {
+	ListView_DeleteAllItems(hList);
+	for (int i = 0; i < arMedia[list].num; i++) {
+		AppendMediaToList(arMedia[list][i]);
+	}
+}
+//리스트의 idx 번째 항목 열기
+void ChangeMedia(int list, int idx) {
+	arMedia[list].nowsel = idx;
+	ListView_SetItemState(hList, -1, 0, LVIS_FOCUSED | LVIS_SELECTED);
+	ListView_SetItemState(hList, idx, LVIS_FOCUSED | LVIS_SELECTED,
+		LVIS_FOCUSED | LVIS_SELECTED);
+	OpenMovie(arMedia[list][arMedia[list].nowsel].Path);
+}
+//파일 드래그
+void DropFiles(HDROP hDrop, bool Reset) {
+	int count;
+	TCHAR MoviePath[MAX_PATH] = TEXT("");
+
+	if (Reset) {
+		arMedia[nowlist].Clear();
+		ListView_DeleteAllItems(hList);
+	}
+
+	count = DragQueryFile(hDrop, 0xffffffff, NULL, 0);
+	for (int i = 0; i < count; i++) {
+		DragQueryFile(hDrop, i, MoviePath, MAX_PATH);
+		AppendMedia(nowlist, MoviePath, true);
+	}
+
+	if (Reset) {
+		if (arMedia[nowlist].num != 0) {
+			ChangeMedia(nowlist, 0);
+			SetForegroundWindow(hWndMain);
+		}
+	}
+}

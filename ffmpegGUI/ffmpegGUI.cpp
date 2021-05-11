@@ -1,6 +1,6 @@
 ﻿//video -> 비트맵, 스레드, software scale, winapi(32)구조, usleep 등 사용
 //audio -> Waveform
-//UI -> Open, 드래그(Stage, List), 글 목록
+//UI -> 윈도우 분할, Open, 윈도우 크기 변경, 글 목록, 드래그(Stage, List),
 #include "header.h"
 #include "struct.h"
 #include "function.h"
@@ -51,7 +51,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
 		NULL, (HMENU)NULL, hInstance, NULL);
 	ShowWindow(hWnd, nCmdShow);
-	
+
 	while (GetMessage(&Message, NULL, 0, 0)) {
 		TranslateMessage(&Message);
 		DispatchMessage(&Message);
@@ -60,9 +60,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 }
 
 //Window 프로시저
-LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
+{
 	HDC hdc;
 	PAINTSTRUCT ps;
+	static bool bFirstActivate = true;
 
 	switch (iMessage) {
 	case WM_CREATE:
@@ -70,7 +72,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		InitCommonControls();
 		QueryPerformanceFrequency(&frequency);
 		CloseHandle(CreateThread(NULL, 0, CallbackThread, NULL, 0, &CallbackThreadID));
-
+		//child 윈도우 만들기전에 읽어오기
+		TCHAR inipath[MAX_PATH];
+		GetModuleFileName(NULL, inipath, MAX_PATH);
+		PathRemoveFileSpec(inipath);
+		lstrcat(inipath, TEXT("\\setting.ini"));
+		setting.SetIniFile(inipath);
+		LoadOption();
 		//WM_CREATE에서 child 윈도우를 생성하고 WM_SIZE에서 배치한다.
 		hStage = CreateWindow(TEXT("Stage"), NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
 			0, 0, 0, 0, hWnd, (HMENU)NULL, g_hInst, NULL);
@@ -79,7 +87,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		hListWnd = CreateWindowEx(WS_EX_CLIENTEDGE, TEXT("MediaList"), NULL,
 			WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
 			0, 0, 0, 0, hWnd, (HMENU)NULL, g_hInst, NULL);
-		OpenMovie(TEXT("c:\\ffstudy\\sample1.mp4"));
+		return 0;
+	case WM_ACTIVATEAPP:
+		if (wParam == TRUE) {
+			if (bFirstActivate) {
+				bFirstActivate = false;
+				SetWindowPlacement(hWndMain, &wndpl);
+				TabCtrl_SetCurSel(hListTab, nowlist);
+				FillList(nowlist);
+				if (arMedia[nowlist].nowsel != -1) {
+					ChangeMedia(nowlist, arMedia[nowlist].nowsel);
+				}
+				else {
+#ifdef _DEBUG
+					OpenMovie(TEXT("c:\\ffstudy\\sample1.mp4"));
+#endif
+				}
+			}
+		}
 		return 0;
 	case WM_SIZE:
 		Relayout(LOWORD(lParam), HIWORD(lParam));
@@ -94,6 +119,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		EndPaint(hWnd, &ps);
 		return 0;
 	case WM_DESTROY:
+		SaveOption();
 		CloseMovie();
 		PostQuitMessage(0);
 		return 0;
@@ -106,7 +132,7 @@ LRESULT CALLBACK StageWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lP
 	case WM_CREATE:
 		DragAcceptFiles(hWnd, TRUE);
 		return 0;
-	//DropFile 받는 대상에 추가
+		//DropFile 받는 대상에 추가
 	case WM_DROPFILES:
 		DropFiles((HDROP)wParam, true);
 		return 0;
@@ -223,7 +249,7 @@ LRESULT CALLBACK ListWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lPa
 		return 0;
 	case WM_COMMAND:
 		switch (LOWORD(wParam)) {
-		//M 버튼
+			//M 버튼
 		case ID_BTNLISTMENU:
 			HMENU hPopup;
 			hPopup = CreatePopupMenu();
@@ -365,7 +391,8 @@ void OpenMovie(LPCTSTR movie) {
 	}
 	if (vidx >= 0) {
 		AdjustWindowSizePos(vPara->width, vPara->height);
-	} else {
+	}
+	else {
 		AdjustWindowSizePos(500, 300);
 		InvalidateRect(hWndMain, NULL, TRUE);
 	}
@@ -389,7 +416,14 @@ DWORD WINAPI PlayThread(LPVOID para) {
 	HDC MemDC;
 	HBITMAP OldBitmap;
 	MemDC = CreateCompatibleDC(hdc);
-	double framerate = av_q2d(vStream->r_frame_rate);
+	double framerate;
+	//framerate가 오디오일수도 있으므로 에러처리
+	if (vidx == 0) {
+		framerate = av_q2d(vStream->r_frame_rate);
+	}
+	else {
+		framerate = av_q2d(aStream->r_frame_rate);
+	}
 	int64_t framegap = int64_t(AV_TIME_BASE / framerate);
 
 	while (av_read_frame(fmtCtx, &packet) == 0) {
@@ -662,14 +696,12 @@ void AdjustWindowSizePos(int width, int height) {
 	/*HMONITOR hMon = MonitorFromRect(&wrt, MONITOR_DEFAULTTOPRIMARY);
 	MONITORINFO mi = { sizeof(MONITORINFO), };
 	GetMonitorInfo(hMon, &mi);
-
 	if (wrt.right - wrt.left > mi.rcWork.right - mi.rcWork.left) {
 		wrt.right = wrt.left + mi.rcWork.right - mi.rcWork.left;
 	}
 	if (wrt.bottom - wrt.top > mi.rcWork.bottom - mi.rcWork.top) {
 		wrt.bottom = wrt.top + mi.rcWork.bottom - mi.rcWork.top;
 	}
-
 	int xdiff = wrt.right - mi.rcWork.right;
 	if (xdiff > 0) {
 		wrt.left -= xdiff;
@@ -790,6 +822,75 @@ void DropFiles(HDROP hDrop, bool Reset) {
 		if (arMedia[nowlist].num != 0) {
 			ChangeMedia(nowlist, 0);
 			SetForegroundWindow(hWndMain);
+		}
+	}
+}
+//옵션 불러오기
+void LoadOption() {
+	TCHAR tApp[128];
+	TCHAR tValue[128];
+	sMedia media;
+
+	wndpl.length = sizeof(WINDOWPLACEMENT);
+	wndpl.flags = 0;
+	wndpl.showCmd = setting.Read(TEXT("Position"), TEXT("showCmd"), SW_RESTORE);
+	if (wndpl.showCmd == SW_SHOWMINIMIZED) {
+		wndpl.showCmd = SW_RESTORE;
+	}
+	wndpl.rcNormalPosition.left = setting.Read(TEXT("Position"), TEXT("left"), 100);
+	wndpl.rcNormalPosition.top = setting.Read(TEXT("Position"), TEXT("top"), 100);
+	wndpl.rcNormalPosition.right = setting.Read(TEXT("Position"), TEXT("right"), 1024);
+	wndpl.rcNormalPosition.bottom = setting.Read(TEXT("Position"), TEXT("bottom"), 580);
+	wndpl.ptMinPosition.x = wndpl.ptMinPosition.y = 0;
+	wndpl.ptMaxPosition.x = wndpl.ptMaxPosition.y = 0;
+
+	listnum = setting.Read(TEXT("List"), TEXT("listnum"), 1);
+	nowlist = setting.Read(TEXT("List"), TEXT("nowList"), 0);
+	for (int list = 0; list < listnum; list++) {
+		wsprintf(tApp, TEXT("List%d"), list);
+		int num = setting.Read(tApp, TEXT("num"), 0);
+		setting.Read(tApp, TEXT("name"), TEXT("목록"), arMedia[list].name);
+		arMedia[list].nowsel = setting.Read(tApp, TEXT("nowsel"), -1);
+		for (int i = 0; i < num; i++) {
+			setting.Read(tApp, TEXT("Name%d"), TEXT(""), media.Path, i);
+			setting.Read(tApp, TEXT("Size%d"), TEXT(""), tValue, i);
+			media.size = _tcstoll(tValue, NULL, 10);
+			setting.Read(tApp, TEXT("Duration%d"), TEXT(""), tValue, i);
+			media.duration = _tcstoll(tValue, NULL, 10);
+
+			AppendMedia(list, media, false);
+		}
+	}
+}
+//옵션 저장
+void SaveOption() {
+	TCHAR tApp[128];
+	TCHAR tValue[128];
+	sMedia media;
+
+	wndpl.length = sizeof(WINDOWPLACEMENT);
+	GetWindowPlacement(hWndMain, &wndpl);
+	setting.Write(TEXT("Position"), TEXT("showCmd"), wndpl.showCmd);
+	setting.Write(TEXT("Position"), TEXT("left"), wndpl.rcNormalPosition.left);
+	setting.Write(TEXT("Position"), TEXT("top"), wndpl.rcNormalPosition.top);
+	setting.Write(TEXT("Position"), TEXT("right"), wndpl.rcNormalPosition.right);
+	setting.Write(TEXT("Position"), TEXT("bottom"), wndpl.rcNormalPosition.bottom);
+
+	setting.Write(TEXT("List"), TEXT("listnum"), listnum);
+	setting.Write(TEXT("List"), TEXT("nowlist"), nowlist);
+	for (int list = 0; list < listnum; list++) {
+		wsprintf(tApp, TEXT("List%d"), list);
+		int num = arMedia[list].num;
+		setting.Write(tApp, TEXT("num"), num);
+		setting.Write(tApp, TEXT("name"), arMedia[list].name);
+		setting.Write(tApp, TEXT("nowsel"), arMedia[list].nowsel);
+		for (int i = 0; i < num; i++) {
+			media = arMedia[list][i];
+			setting.Write(tApp, TEXT("Name%d"), media.Path, i);
+			wsprintf(tValue, TEXT("%I64d"), media.size);
+			setting.Write(tApp, TEXT("Size%d"), tValue, i);
+			wsprintf(tValue, TEXT("%I64d"), media.duration);
+			setting.Write(tApp, TEXT("Duration%d"), tValue, i);
 		}
 	}
 }

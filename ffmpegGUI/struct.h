@@ -1,8 +1,5 @@
 #include "header.h"
 
-//PlayThread에서 재생끝날때 메세지
-#define WM_MEDIA_DONE WM_USER+1
-
 //패널내의 컨트롤ID. 패널의 높이
 enum {
 	ID_BTNOPEN = 1, ID_BTNPAUSE, ID_STTIME, ID_SLVOLUME,
@@ -43,3 +40,5 @@ struct sMedia {
 	int64_t duration;
 	int64_t size;
 };
+//PlayThread에서 재생끝날때 메세지
+#define WM_MEDIA_DONE WM_USER+1

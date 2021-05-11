@@ -1,5 +1,7 @@
 #include "header.h"
 
+
+
 HINSTANCE g_hInst;
 LPCTSTR lpszClass = TEXT("플레이어");
 HWND hWndMain;
@@ -73,14 +75,91 @@ public:
 	void Clear() { Uninit(); Init(); }
 	sMedia& operator [](int idx) { return ar[idx]; }
 };
-
 //경로,재생시간,파일 크기
 const int maxlist = 10;
 int listnum = 1;
 int nowlist = 0;
 MediaArray arMedia[maxlist];
-
 //리스트 핸들 선언
 HWND hList, hListTab;
 HWND hBtnListMenu, hBtnListAdd, hBtnListRemove, hBtnListDel;
 enum { ID_BTNLISTMENU = 101, ID_BTNLISTADD, ID_BTNLISTREMOVE, ID_BTNLISTDEL };
+
+
+//설정 관리 클래스
+class SettingFile {
+public:
+	TCHAR IniFile[MAX_PATH];
+
+	void SetIniFile(LPCTSTR Path) {
+		lstrcpy(IniFile, Path);
+	}
+	int Read(LPCTSTR app, LPCTSTR keyfmt, int defvalue, ...) {
+		TCHAR key[1024];
+		va_list args;
+		va_start(args, defvalue);
+		_vstprintf_s(key, 1024, keyfmt, args);
+		return GetPrivateProfileInt(app, key, defvalue, IniFile);
+	}
+	// 버퍼 길이는 최소 260 또는 확실히 넘지 않을 자신 있어야 함. 
+	void Read(LPCTSTR app, LPCTSTR keyfmt, LPCTSTR defvalue, LPTSTR ret, ...) {
+		TCHAR key[1024];
+		va_list args;
+		va_start(args, ret);
+		_vstprintf_s(key, 1024, keyfmt, args);
+		GetPrivateProfileString(app, key, defvalue, ret, MAX_PATH, IniFile);
+	}
+	void Write(LPCTSTR app, LPCTSTR keyfmt, int value, ...) {
+		TCHAR key[1024];
+		va_list args;
+		va_start(args, value);
+		_vstprintf_s(key, 1024, keyfmt, args);
+		TCHAR tValue[128];
+		wsprintf(tValue, TEXT("%d"), value);
+		Write(app, key, tValue);
+	}
+	void Write(LPCTSTR app, LPCTSTR keyfmt, LPCTSTR value, ...) {
+		TCHAR key[1024];
+		va_list args;
+		va_start(args, value);
+		_vstprintf_s(key, 1024, keyfmt, args);
+		WritePrivateProfileString(app, key, value, IniFile);
+	}
+};
+SettingFile setting;
+WINDOWPLACEMENT wndpl;
+
+//음소거, 이전 볼륨값 변수
+bool isMute;
+DWORD oldVolume;
+//배열의 요소 개수 조사 매크로
+enum eAccel {
+	A_SPACE, A_LEFT, A_RIGHT, A_UP, A_DOWN, A_PRIOR, A_NEXT, A_BACK,
+	A_A, A_Q, A_M, A_W, A_S, A_RETURN, A_ESC
+};
+ACCEL arAccel[] = {
+	{ FVIRTKEY, VK_SPACE, A_SPACE },
+	{ FVIRTKEY, VK_LEFT, A_LEFT },
+	{ FVIRTKEY | FCONTROL, VK_LEFT, A_LEFT },
+	{ FVIRTKEY | FSHIFT, VK_LEFT, A_LEFT },
+	{ FVIRTKEY, VK_RIGHT, A_RIGHT },
+	{ FVIRTKEY | FCONTROL, VK_RIGHT, A_RIGHT },
+	{ FVIRTKEY | FSHIFT, VK_RIGHT, A_RIGHT },
+	{ FVIRTKEY, VK_UP, A_UP },
+	{ FVIRTKEY, VK_DOWN, A_DOWN },
+	{ FVIRTKEY, VK_PRIOR, A_PRIOR },
+	{ FVIRTKEY, VK_NEXT, A_NEXT },
+	{ FVIRTKEY, VK_BACK, A_BACK },
+	{ FVIRTKEY, 'Q', A_Q },
+	{ FVIRTKEY, 'A', A_A },
+	{ FVIRTKEY, 'W', A_W },
+	{ FVIRTKEY, 'S', A_S },
+	{ FVIRTKEY, 'M', A_M },
+	{ FVIRTKEY, VK_RETURN, A_RETURN },
+	{ FVIRTKEY, VK_ESCAPE, A_ESC },
+};
+#define ARSIZE(ar) (sizeof(ar)/sizeof(ar[0]))
+TCHAR overlayMsg[128];
+UINT overlayMsgHpos;
+UINT overlayMsgVpos;
+ULONGLONG overlayMsgTimout;

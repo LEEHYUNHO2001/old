@@ -132,7 +132,7 @@ WINDOWPLACEMENT wndpl;
 //음소거, 이전 볼륨값 변수
 bool isMute;
 DWORD oldVolume;
-//배열의 요소 개수 조사 매크로
+//휠, 키보드로 볼륨 조절 가능
 enum eAccel {
 	A_SPACE, A_LEFT, A_RIGHT, A_UP, A_DOWN, A_PRIOR, A_NEXT, A_BACK,
 	A_A, A_Q, A_M, A_W, A_S, A_RETURN, A_ESC
@@ -158,7 +158,9 @@ ACCEL arAccel[] = {
 	{ FVIRTKEY, VK_RETURN, A_RETURN },
 	{ FVIRTKEY, VK_ESCAPE, A_ESC },
 };
+//배열의 요소 개수 조사 매크로
 #define ARSIZE(ar) (sizeof(ar)/sizeof(ar[0]))
+//볼륨값 보여주기 위한 변수
 TCHAR overlayMsg[128];
 UINT overlayMsgHpos;
 UINT overlayMsgVpos;

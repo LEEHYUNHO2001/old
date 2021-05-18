@@ -1,6 +1,7 @@
 ﻿//video -> 비트맵, 스레드, software scale, winapi(32)구조, usleep 등 사용
 //audio -> Waveform
-//UI -> 윈도우 분할, Open, 윈도우 크기 변경, 글 목록, 드래그(Stage, List),
+//UI -> 윈도우 분할, Open, 윈도우 크기 변경, 글 목록, 드래그(Stage, List)
+//ini파일 -> 설정 저장(window창 위치, 목록 등)
 #include "header.h"
 #include "struct.h"
 #include "function.h"
@@ -51,6 +52,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
 		NULL, (HMENU)NULL, hInstance, NULL);
 	ShowWindow(hWnd, nCmdShow);
+
+	HACCEL hAccel = CreateAcceleratorTable(arAccel, ARSIZE(arAccel));
 
 	while (GetMessage(&Message, NULL, 0, 0)) {
 		TranslateMessage(&Message);
@@ -106,18 +109,67 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			}
 		}
 		return 0;
+
+	case WM_COMMAND:
+		switch (LOWORD(wParam)) {
+		case A_UP:
+			if (GetFocus() == hList) {
+				SendMessage(hList, WM_KEYDOWN, VK_UP, 0);
+			}
+			else {
+				AdjustVolume(true);
+			}
+			break;
+		case A_DOWN:
+			if (GetFocus() == hList) {
+				SendMessage(hList, WM_KEYDOWN, VK_DOWN, 0);
+			}
+			else {
+				AdjustVolume(false);
+			}
+			break;
+		case A_M:
+			DWORD voldevice;
+
+			isMute = !isMute;
+			if (isMute) {
+				waveOutGetVolume(wa.hWaveDev, &voldevice);
+				oldVolume = DWORD(LOWORD(voldevice) * 100.0 / 0xffff + 0.5);
+				AdjustVolumeTo(0);
+				isMute = true;
+			}
+			else {
+				AdjustVolumeTo(oldVolume);
+			}
+			break;
+		case A_PRIOR:
+			if (arMedia[nowlist].nowsel > 0) {
+				ChangeMedia(nowlist, arMedia[nowlist].nowsel - 1);
+			}
+			break;
+		case A_NEXT:
+			if (arMedia[nowlist].nowsel < arMedia[nowlist].num - 1) {
+				ChangeMedia(nowlist, arMedia[nowlist].nowsel + 1);
+			}
+			break;
+		}
+		return 0;
+
 	case WM_SIZE:
 		Relayout(LOWORD(lParam), HIWORD(lParam));
 		return 0;
+
 	case WM_MEDIA_DONE:
 		if (arMedia[nowlist].nowsel < arMedia[nowlist].num - 1) {
 			ChangeMedia(nowlist, arMedia[nowlist].nowsel + 1);
 		}
 		return 0;
+
 	case WM_PAINT:
 		hdc = BeginPaint(hWnd, &ps);
 		EndPaint(hWnd, &ps);
 		return 0;
+
 	case WM_DESTROY:
 		SaveOption();
 		CloseMovie();
@@ -132,9 +184,13 @@ LRESULT CALLBACK StageWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lP
 	case WM_CREATE:
 		DragAcceptFiles(hWnd, TRUE);
 		return 0;
-		//DropFile 받는 대상에 추가
+	//DropFile 받는 대상에 추가
 	case WM_DROPFILES:
 		DropFiles((HDROP)wParam, true);
+		return 0;
+	//휠로 볼륨조절
+	case WM_MOUSEWHEEL:
+		AdjustVolume((short)HIWORD(wParam) > 0);
 		return 0;
 	}
 	return(DefWindowProc(hWnd, iMessage, wParam, lParam));
@@ -180,6 +236,13 @@ LRESULT CALLBACK PanelWndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lP
 		MoveWindow(hBtnFull, LOWORD(lParam) - 65, 5, 25, 25, TRUE);
 		MoveWindow(hBtnMax, LOWORD(lParam) - 95, 5, 25, 25, TRUE);
 		MoveWindow(hBtnMin, LOWORD(lParam) - 125, 5, 25, 25, TRUE);
+		return 0;
+	//트랙바 드래그
+	case WM_HSCROLL:
+		if ((HWND)lParam == hVolume) {
+			int vol = (int)SendMessage(hVolume, TBM_GETPOS, 0, 0);
+			AdjustVolumeTo(vol);
+		}
 		return 0;
 	case WM_COMMAND:
 		switch (LOWORD(wParam)) {
@@ -458,6 +521,12 @@ DWORD WINAPI PlayThread(LPVOID para) {
 				// 비트맵으로 뿌리기
 				HBITMAP bitmap = CreateBitmap(vFrame.width, vFrame.height, 1, 32, RGBFrame.data[0]);
 				OldBitmap = (HBITMAP)SelectObject(MemDC, bitmap);
+
+				//비트맵 출력 직전에 오버레이 메세지 출력(볼륨변경값 출력)
+				if (GetTickCount64() < overlayMsgTimout) {
+					DrawOverlayMsg(MemDC, &vFrame);
+				}
+
 				BitBlt(hdc, 0, 0, vFrame.width, vFrame.height, MemDC, 0, 0, SRCCOPY);
 				SelectObject(MemDC, OldBitmap);
 				DeleteObject(bitmap);
@@ -893,4 +962,92 @@ void SaveOption() {
 			setting.Write(tApp, TEXT("Duration%d"), tValue, i);
 		}
 	}
+}
+void AdjustVolumeTo(int vol) {
+	int voldevice;
+
+	if (isMute) {
+		isMute = false;
+	}
+
+	int tvol = max(min(vol, 100), 0);
+	voldevice = tvol * 0xffff / 100;
+	waveOutSetVolume(wa.hWaveDev, MAKELONG(voldevice, voldevice));
+	SendMessage(hVolume, TBM_SETPOS, TRUE, tvol);
+	//볼륨 변경시 오버레이 메세지 등록
+	TCHAR msg[128];
+	wsprintf(msg, TEXT("Volume : %d%%"), tvol);
+	SetOverlayMsg(msg);
+}
+
+void AdjustVolume(bool up) {
+	DWORD voldevice, vol;
+
+	if (isMute) {
+		vol = oldVolume;
+	}
+	else {
+		waveOutGetVolume(wa.hWaveDev, &voldevice);
+		vol = DWORD(LOWORD(voldevice) * 100.0 / 0xffff + 0.5);
+	}
+	AdjustVolumeTo(vol + (up ? 10 : -10));
+}
+
+void SetOverlayMsg(LPCTSTR msg, UINT hpos, UINT vpos, int timeout) {
+	lstrcpy(overlayMsg, msg);
+	overlayMsgHpos = hpos;
+	overlayMsgVpos = vpos;
+	overlayMsgTimout = GetTickCount64() + timeout;
+}
+
+void DrawOverlayMsg(HDC hdc, AVFrame* pFrame) {
+	int x = 0, y = 0;
+	UINT Align;
+	COLORREF oldColor;
+	UINT oldAlign;
+	int oldMode;
+	Align = TA_LEFT | TA_TOP;
+	HFONT hFont;
+	HFONT hOldFont;
+
+	hFont = CreateFont(25, 0, 0, 0, 0, 0, 0, 0, ANSI_CHARSET, 3, 2, 1,
+		VARIABLE_PITCH | FF_SWISS, TEXT("Arial"));
+
+	switch (overlayMsgHpos) {
+	case 0:
+		x = 10;
+		break;
+	case 1:
+		x = pFrame->width / 2;
+		Align |= TA_CENTER;
+		break;
+	case 2:
+		x = pFrame->width - 10;
+		Align |= TA_RIGHT;
+		break;
+	}
+
+	switch (overlayMsgVpos) {
+	case 0:
+		y = 10;
+		break;
+	case 1:
+		y = pFrame->height / 2;
+		break;
+	case 2:
+		y = pFrame->height - 10;
+		Align |= TA_BOTTOM;
+		break;
+	}
+	oldMode = SetBkMode(hdc, TRANSPARENT);
+	oldColor = SetTextColor(hdc, RGB(0, 255, 0));
+	oldAlign = SetTextAlign(hdc, Align);
+	hOldFont = (HFONT)SelectObject(hdc, hFont);
+	TextOut(hdc, x, y, overlayMsg, lstrlen(overlayMsg));
+	SelectObject(hdc, hOldFont);
+	SetTextAlign(hdc, oldAlign);
+	SetTextColor(hdc, oldColor);
+	SetBkMode(hdc, oldMode);
+
+	DeleteObject(hFont);
 }

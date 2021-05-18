@@ -1,0 +1,13 @@
+# ffmpeg project
+- [x] Video File에서 Video Stream, Audio Stream 찾기
+- [x] Video Stream, Audio Stream에 해당하는 Codec Open
+- [x] Codec으로 압축 풀어 패킷 받기
+- [x] Codec 내부 Buffer 에러처리
+- [x] sws_scale 색상포맷에 따른 변환, bitmap 출력
+- [x] Thread분리 -> PlayThread 생성. Video 출력 -> uSleep함수 이용한 연속재생
+- [x] Audio 출력을 위한 Waveform사용 -> 오디오 리샘플링, 가변패킷 저장 algorithm
+- [x] Window 분할 -> Pannel(Open, Pause, + - D button), Stage, List(목록)
+- [x] 파일 Open, 글 목록
+- [x] Video File에 따른 Window 창 크기설정, Video File 드래그하여 목록에 추가
+- [x] ini File에 설정 정보 저장(목록, window창 위치 등)
+- [x] 볼륨 설정 -> 볼륨값도 비트맵에 같이 표시

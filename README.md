@@ -60,7 +60,7 @@
 
 ### Codec
 
-<img width="290" alt="codec" src="https://user-images.githubusercontent.com/78518132/121275078-d37b6c00-c906-11eb-8751-d3990b118052.png">
+<img width="450" alt="codec" src="https://user-images.githubusercontent.com/78518132/121275078-d37b6c00-c906-11eb-8751-d3990b118052.png">
 
 - 영상 또는 오디오의 신호를 디지털 신호로 변환하는 **COder**와 그 반대로 변환시켜 주는 **DECoder**를 통틀어 부르는 용어이다.
 - **Encoding** : 코덱은 아날로그 신호나 스트림 데이터로 이루어진 비디오와 오디오를 **압축**된 부호로 변환하기 위한 압축 규격을 제공한다.  →  용량을 줄이기 위해 한다.
